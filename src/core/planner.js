@@ -33,6 +33,8 @@ export const DEFAULT_SETTINGS = {
   subtitles: false,
   subtitleWords: 5,
   subtitleStyle: 'plain',
+  autoUpdateCheck: true,   // silently look for a newer build on start-up
+  updateUrl: '',           // optional self-hosted update manifest ({version, apk})
 };
 
 function evenDistribute(total, parts, minEach, maxEach) {

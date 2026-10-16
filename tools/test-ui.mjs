@@ -9,7 +9,7 @@ import { parseHTML } from 'linkedom';
 /* ---------------- DOM & browser shims ---------------- */
 const { document, window } = parseHTML(`<!doctype html><html lang="fa" dir="rtl"><body>
   <div id="app">
-    <header id="appbar"><button id="btn-back"></button><span id="appbar-step"></span><button id="btn-settings"></button></header>
+    <header id="appbar"><button id="btn-back"></button><span id="appbar-step"></span><span class="appbar__side--end"><button id="btn-update" hidden>⟳</button><button id="btn-settings"></button></span></header>
     <div id="stepper">
       ${[1, 2, 3, 4, 5, 6].map((s) => `<div class="stepper__item" data-step="${s}"><i>${s}</i><span>s</span></div>`).join('')}
     </div>
@@ -101,7 +101,7 @@ globalThis.AudioBuffer = class {};
 
 /* ---------------- imports (after shims) ---------------- */
 const { state } = await import('../src/state.js');
-const { setRouter, go } = await import('../src/ui/shell.js');
+const { setRouter, go, setUpdateBadge, updateBadgeVisible } = await import('../src/ui/shell.js');
 const { renderMediaScreen } = await import('../src/ui/mediaScreen.js');
 const { renderStyleScreen } = await import('../src/ui/styleScreen.js');
 const { renderTextScreen } = await import('../src/ui/textScreen.js');
@@ -109,8 +109,11 @@ const { renderMusicScreen } = await import('../src/ui/musicScreen.js');
 const { renderPreviewScreen } = await import('../src/ui/previewScreen.js');
 const { renderExportScreen } = await import('../src/ui/exportScreen.js');
 const { openSettingsSheet } = await import('../src/ui/settingsSheet.js');
+const { closeSheet } = await import('../src/ui/shell.js');
 const { renderEditorScreen } = await import('../src/ui/editorScreen.js');
 const { openSubtitleSheet } = await import('../src/ui/subtitleScreen.js');
+const { openUpdateSheet, applyUpdateAction } = await import('../src/ui/updateSheet.js');
+const Upd = await import('../src/core/update.js');
 const { ensurePlan, planSummary } = await import('../src/project.js');
 
 let failures = 0;
@@ -307,6 +310,64 @@ console.log('\n▸ router + settings sheet');
   ok(sheet.hidden === false, 'settings sheet opens');
   ok(sheet.textContent.includes('آیدی اینستاگرام'), 'handle field present');
   ok(sheet.textContent.includes('هوش مصنوعی'), 'ai section present');
+}
+
+
+console.log('\n▸ update button («بروزرسانی»)');
+{
+  ok(updateBadgeVisible() === false, 'update badge starts hidden');
+  ok(setUpdateBadge(true, 'نسخهٔ جدید') === true, 'badge can be switched on');
+  ok(updateBadgeVisible() === true, 'badge is visible when an update waits');
+  ok(document.getElementById('btn-update').title.includes('نسخهٔ جدید'), 'badge carries a tooltip');
+  ok(setUpdateBadge(false) === false && updateBadgeVisible() === false, 'badge hides again');
+
+  state.update.mode = 'web';
+  state.update.available = true;
+  state.update.latest = { version: '9.9.9', apkName: 'reelforge.apk', apkSize: 7_000_000, notes: '- سرعت رندر' };
+  state.update.notes = '- سرعت رندر';
+  state.update.checkedOnce = true;
+  state.update.ok = true;
+  state.update.webReady = true;
+
+  openUpdateSheet();
+  const sheet = document.getElementById('sheet-host');
+  ok(sheet.hidden === false, 'update sheet opens');
+  ok(sheet.textContent.includes('بروزرسانی'), 'sheet is titled «بروزرسانی»');
+  ok(sheet.textContent.includes('نسخهٔ نصب‌شده'), 'shows the installed version');
+  ok(sheet.textContent.includes(Upd.faVersion(Upd.APP_VERSION)), 'the version is shown in Persian digits', Upd.faVersion(Upd.APP_VERSION));
+  ok(sheet.textContent.includes('وب / PWA'), 'web mode is labelled');
+  ok([...sheet.querySelectorAll('button')].some((b) => b.textContent.includes('راه‌اندازی')), 'primary action is «بروزرسانی و راه‌اندازی دوباره»');
+  ok([...sheet.querySelectorAll('button')].some((b) => b.textContent.includes('بررسی دوباره')), 'a re-check button exists');
+  ok([...sheet.querySelectorAll('button')].some((b) => b.textContent.includes('صفحهٔ دانلود')), 'the download page is reachable');
+  ok(sheet.textContent.includes('بررسی خودکار'), 'auto-check toggle present');
+  ok(sheet.querySelectorAll('.chip').length >= 2, 'auto-check chips render');
+  ok(sheet.textContent.includes('آدرس بروزرسانی'), 'advanced update url field present');
+  ok(sheet.textContent.includes('سرعت رندر'), 'release notes are listed');
+
+  // native mode: primary action becomes the APK download
+  state.update.mode = 'android';
+  state.update.webReady = false;
+  state.update.apkUrl = 'https://x/app.apk';
+  openUpdateSheet();
+  ok(document.getElementById('sheet-host').textContent.includes('اپ اندروید'), 'android mode is labelled');
+  ok([...document.getElementById('sheet-host').querySelectorAll('button')].some((b) => b.textContent.includes('دانلود نسخهٔ جدید')), 'android shows the download action');
+  ok(document.getElementById('sheet-host').textContent.includes('reelforge.apk'), 'the apk file name is shown');
+
+  // up-to-date web app
+  state.update.mode = 'web';
+  state.update.available = false;
+  state.update.apkUrl = '';
+  state.update.notes = '';
+  state.update.ok = true;
+  openUpdateSheet();
+  const upSheet = document.getElementById('sheet-host');
+  ok(upSheet.textContent.includes('آخرین نسخه را داری'), 'up-to-date status is shown');
+  ok([...upSheet.querySelectorAll('button')].some((b) => b.textContent.trim().startsWith('بررسی بروزرسانی')), 'the primary button becomes a plain check');
+
+  // no service worker in tests → applying tells us it could not reload
+  const applied = await applyUpdateAction('none');
+  ok(applied === 'check' || applied === 'none', 'applyUpdateAction survives without a service worker', applied);
+  closeSheet();
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} UI checks passed`);

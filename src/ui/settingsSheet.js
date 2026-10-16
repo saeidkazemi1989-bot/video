@@ -2,6 +2,8 @@
 import { state, savePrefs } from '../state.js';
 import { el } from '../core/util.js';
 import { openSheet, closeSheet, btn, toast, chips } from './shell.js';
+import { openUpdateSheet } from './updateSheet.js';
+import { APP_VERSION, faVersion } from '../core/update.js';
 
 const PROVIDERS = [
   { id: 'none', label: 'خاموش (آفلاین)' },
@@ -59,6 +61,13 @@ export function openSettingsSheet(onSaved) {
       el('div', { class: 'field' }, [el('label', { text: 'آدرس سرور (Base URL)' }), urlInput]),
       el('div', { class: 'field' }, [el('label', { text: 'مدل' }), modelInput]),
       el('div', { class: 'field' }, [el('label', { text: 'کلید API' }), keyInput]),
+      el('div', { class: 'field' }, [
+        el('label', { text: 'بروزرسانی' }),
+        el('div', { class: 'row row--between' }, [
+          el('span', { class: 'muted', text: `نسخهٔ نصب‌شده: ${faVersion(APP_VERSION)}` }),
+          btn('بررسی بروزرسانی ⟳', { small: true, onClick: () => openUpdateSheet() }),
+        ]),
+      ]),
       el('div', { class: 'row' }, [
         btn('ذخیره', {
           primary: true,

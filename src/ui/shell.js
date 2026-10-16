@@ -31,6 +31,23 @@ export function renderChrome() {
   if (back) back.hidden = state.step === 1;
 }
 
+/**
+ * App-bar «بروزرسانی» badge: visible only while a new build is waiting (or a
+ * newer release exists). Clicking it is wired up in main.js.
+ */
+export function setUpdateBadge(on, title = '') {
+  const node = $('#btn-update');
+  if (!node) return false;
+  node.hidden = !on;
+  if (title) node.title = title;
+  node.classList.toggle('is-live', !!on);
+  return !!on;
+}
+export const updateBadgeVisible = () => {
+  const node = $('#btn-update');
+  return !!node && !node.hidden;
+};
+
 export function setBottomBar(children = []) {
   const bar = $('#bottom-bar');
   bar.innerHTML = '';

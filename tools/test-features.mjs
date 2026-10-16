@@ -10,6 +10,7 @@ import * as Edit from '../src/core/editPlan.js';
 import { buildPlan, DEFAULT_SETTINGS } from '../src/core/planner.js';
 import { attachSubtitles } from '../src/core/overlays.js';
 import { drawSubtitles, SUBTITLE_STYLES } from '../src/core/text.js';
+import * as Upd from '../src/core/update.js';
 
 let failures = 0, checks = 0;
 function ok(cond, label, extra = '') {
@@ -514,6 +515,155 @@ section('manual timeline editor');
   ok(plan.cuts.length === 1, 'last shot cannot be deleted');
   const single = plan.cuts[0];
   ok(Math.abs(plan.duration - single.dur) < 1e-3, 'duration follows the single shot');
+}
+
+
+/* ================================================================== */
+section('update engine («بروزرسانی»)');
+
+{
+  // ---- version maths ----
+  ok(Upd.parseVersion('1.2.3').parts.join('.') === '1.2.3', 'parses x.y.z');
+  ok(Upd.parseVersion('v2.0').parts.join('.') === '2.0.0', 'parses v2.0 as 2.0.0');
+  ok(Upd.parseVersion('1.2.3-beta.1').pre === 'beta.1', 'keeps the pre-release tag');
+  ok(Upd.parseVersion('garbage') === null, 'rejects nonsense versions');
+  ok(Upd.parseVersion('') === null, 'rejects empty versions');
+  ok(Upd.parseVersion(Upd.APP_VERSION) !== null || Upd.APP_VERSION === '0.0.0-dev', 'APP_VERSION is a real version');
+
+  ok(Upd.compareVersions('1.2.0', '1.1.9') === 1, '1.2.0 > 1.1.9');
+  ok(Upd.compareVersions('1.10.0', '1.9.0') === 1, 'numeric, not lexicographic');
+  ok(Upd.compareVersions('1.0.0', '1.0.0') === 0, 'equal versions compare equal');
+  ok(Upd.compareVersions('v1.1.0', '1.1.0') === 0, 'the leading v is ignored');
+  ok(Upd.compareVersions('1.0.0-beta', '1.0.0') === -1, 'pre-release sorts below the release');
+  ok(Upd.isNewer('1.2.0', '1.1.0') === true, 'isNewer detects a newer build');
+  ok(Upd.isNewer('1.1.0', '1.1.0') === false, 'isNewer is false on the same build');
+
+  ok(Upd.faVersion('1.2.3') === '۱٫۲٫۳', 'Persian digits + decimal separator');
+  ok(Upd.faVersion('v1.10.0') === '۱٫۱۰٫۰', 'faVersion strips the v and keeps 10');
+
+  // ---- release payloads ----
+  const release = {
+    tag_name: 'v1.2.0', name: 'ReelForge 1.2.0', html_url: 'https://x/rel/1.2.0',
+    body: '## تازه‌ها\n- دکمهٔ بروزرسانی\n- سرعت رندر', published_at: '2026-10-16T00:00:00Z',
+    assets: [
+      { name: 'reelforge-web-dist.zip', size: 10, browser_download_url: 'https://x/web.zip' },
+      { name: 'reelforge-abc1234-debug.apk', size: 7350987, browser_download_url: 'https://x/app.apk' },
+      { name: 'BUILD.txt', size: 100, browser_download_url: 'https://x/build.txt' },
+    ],
+  };
+  const norm = Upd.normalizeRelease(release);
+  ok(norm.version === '1.2.0', 'release version normalised', norm.version);
+  ok(norm.apkUrl === 'https://x/app.apk', 'picks the .apk asset', norm.apkUrl);
+  ok(norm.apkSize === 7350987, 'carries the APK size through');
+  ok(norm.url === 'https://x/rel/1.2.0', 'keeps the release page url');
+  ok(norm.notes.includes('دکمهٔ بروزرسانی'), 'keeps release notes');
+  ok(Upd.normalizeRelease({ ...release, draft: true }) === null, 'ignores drafts');
+  ok(Upd.normalizeRelease({ ...release, prerelease: true }) === null, 'ignores pre-releases');
+  ok(Upd.normalizeRelease({ tag_name: 'v1.2.0' }).apkUrl === '', 'a release without an APK still parses');
+  ok(Upd.normalizeRelease({ tag_name: 'nope' }) === null, 'garbage tag → null');
+  ok(Upd.normalizeRelease(null) === null, 'null payload is safe');
+
+  ok(Upd.normalizeCustom({ version: '1.3.0', apk: 'https://h/app.apk' }).apkUrl === 'https://h/app.apk', 'custom manifest (string apk)');
+  const customObj = Upd.normalizeCustom({ version: 'v1.3.0', apk: { url: 'https://h/a.apk', name: 'reelforge.apk', size: 42 } });
+  ok(customObj.apkName === 'reelforge.apk' && customObj.apkSize === 42, 'custom manifest (object apk)');
+  ok(Upd.normalizeCustom({ version: 'x' }) === null, 'custom manifest with a bad version → null');
+  ok(Upd.pickApkAsset({ assets: [] }) === null, 'no assets → no apk');
+
+  // ---- checkForUpdate with an injected fetch ----
+  const res = (payload, status = 200) => Promise.resolve({
+    ok: status >= 200 && status < 300, status, json: async () => payload,
+  });
+  const newer = await Upd.checkForUpdate({ current: '1.1.0', fetchImpl: () => res(release) });
+  ok(newer.ok === true, 'check succeeds');
+  ok(newer.hasUpdate === true, 'a newer release is flagged');
+  ok(newer.apkUrl === 'https://x/app.apk', 'the download url is exposed');
+  ok(newer.source === 'github', 'source recorded');
+
+  const same = await Upd.checkForUpdate({ current: '1.2.0', fetchImpl: () => res(release) });
+  ok(same.ok === true && same.hasUpdate === false, 'the current build is not an update');
+
+  const older = await Upd.checkForUpdate({ current: '2.0.0', fetchImpl: () => res(release) });
+  ok(older.hasUpdate === false, 'an older release is not an update');
+
+  const privateRepo = await Upd.checkForUpdate({ current: '1.1.0', fetchImpl: () => res({ message: 'Not Found' }, 404) });
+  ok(privateRepo.ok === false && privateRepo.error === 'http-404', '404 (private repo) is reported', privateRepo.error);
+  ok(Upd.explainError('http-404').includes('خصوصی'), 'the 404 explanation mentions the private repo');
+
+  const customFirst = await Upd.checkForUpdate({
+    current: '1.1.0',
+    customUrl: 'https://host/latest.json',
+    fetchImpl: (url) => (url.includes('host') ? res({ version: '1.4.0', apk: 'https://host/a.apk' }) : res({}, 404)),
+  });
+  ok(customFirst.ok === true && customFirst.latest.version === '1.4.0', 'custom manifest wins when it answers');
+  ok(customFirst.source === 'custom', 'custom source recorded');
+  ok(customFirst.hasUpdate === true, 'custom manifest drives hasUpdate');
+
+  const fallbackToGithub = await Upd.checkForUpdate({
+    current: '1.1.0',
+    customUrl: 'https://host/latest.json',
+    fetchImpl: (url) => (url.includes('host') ? Promise.reject(new Error('offline')) : res(release)),
+  });
+  ok(fallbackToGithub.ok === true && fallbackToGithub.source === 'github', 'falls back to GitHub when the custom url fails');
+
+  const dead = await Upd.checkForUpdate({ current: '1.1.0', fetchImpl: () => Promise.reject(new Error('Failed to fetch')) });
+  ok(dead.ok === false && dead.hasUpdate === false, 'a dead network never claims an update');
+  ok(Upd.explainError(dead.error).length > 10, 'every error has a Persian explanation');
+
+  const slow = await Upd.checkForUpdate({ current: '1.1.0', timeoutMs: 30, fetchImpl: () => new Promise(() => {}) });
+  ok(slow.ok === false && slow.error === 'timeout', 'a hanging request times out', slow.error);
+
+  ok((await Upd.checkForUpdate({ current: '1.1.0', fetchImpl: null })).error === 'no-fetch', 'no fetch → explicit error');
+
+  // ---- what the button does ----
+  ok(Upd.updateAction({ mode: 'web', webReady: true }) === 'reload', 'waiting worker → reload');
+  ok(Upd.updateAction({ mode: 'android', hasUpdate: true, apkUrl: 'https://x/a.apk' }) === 'download', 'android + apk → download');
+  ok(Upd.updateAction({ mode: 'android', hasUpdate: true }) === 'open', 'android without an apk → open the page');
+  ok(Upd.updateAction({ mode: 'web', hasUpdate: true }) === 'reload', 'web + newer deploy → reload');
+  ok(Upd.updateAction({ mode: 'android', hasUpdate: false }) === 'none', 'nothing new → none');
+  ok(Upd.actionLabel('download').includes('دانلود'), 'action labels are Persian');
+  ok(Upd.actionLabel('reload').includes('راه‌اندازی'), 'the reload label explains itself');
+
+  // ---- status lines ----
+  const st = Upd.statusText({ ok: true, current: '1.1.0', hasUpdate: true, latest: { version: '1.2.0' } }, { mode: 'android' });
+  ok(st.includes('۱٫۲٫۰') && st.includes('۱٫۱٫۰'), 'status names both versions', st);
+  ok(Upd.statusText({ ok: true, current: '1.2.0', hasUpdate: false }).includes('آخرین نسخه'), 'up-to-date message');
+  ok(Upd.statusText({ ok: false, error: 'offline' }).includes('اینترنت'), 'offline message');
+  ok(Upd.statusText({ ok: false, error: 'timeout' }).includes('مهلت'), 'timeout message');
+
+  // ---- environment ----
+  ok(Upd.platformOf({}) === 'web', 'plain page → web');
+  ok(Upd.platformOf({ Capacitor: { getPlatform: () => 'android' } }) === 'android', 'Capacitor android detected');
+  ok(Upd.isNative({ Capacitor: { getPlatform: () => 'ios' } }) === true, 'iOS counts as native');
+  ok(Upd.isNative({}) === false, 'web is not native');
+
+  const opened = [];
+  ok(Upd.openExternal('https://x/a.apk', { Capacitor: { Plugins: { Browser: { open: (o) => opened.push(o.url) } } } }) === 'browser', 'native browser plugin used');
+  ok(opened[0] === 'https://x/a.apk', 'the native plugin got the right url');
+  const wins = [];
+  ok(Upd.openExternal('https://x/b.apk', { open: (u) => { wins.push(u); return {}; } }) === 'window', 'window.open fallback');
+  const loc = { href: '' };
+  ok(Upd.openExternal('https://x/c.apk', { location: loc }) === 'location', 'location fallback');
+  ok(loc.href === 'https://x/c.apk', 'location fallback navigates');
+  ok(Upd.openExternal('', {}) === 'none', 'empty url is ignored');
+
+  // ---- web build detection ----
+  const perf = { getEntriesByType: () => [{ name: 'https://app.local/assets/index-OLDHASH.js' }] };
+  const htmlWithDifferentHash = '<script type="module" src="./assets/index-NEWHASH.js"></script>';
+  const web = await Upd.detectWebBuild({
+    perf, doc: null, fetchImpl: () => Promise.resolve({ ok: true, status: 200, text: async () => htmlWithDifferentHash }),
+  });
+  ok(web?.hasUpdate === true, 'a redeployed bundle is detected', JSON.stringify(web));
+  ok(web.running === 'index-OLDHASH.js' && web.remote === 'index-NEWHASH.js', 'both hashes are reported');
+  const sameWeb = await Upd.detectWebBuild({
+    perf, doc: null, fetchImpl: () => Promise.resolve({ ok: true, status: 200, text: async () => '<script src="./assets/index-OLDHASH.js"></script>' }),
+  });
+  ok(sameWeb.hasUpdate === false, 'the same bundle is not an update');
+  ok((await Upd.detectWebBuild({ perf: { getEntriesByType: () => [] }, doc: null, fetchImpl: () => res({}) })) === null, 'dev build (no hashed bundle) → null');
+  ok((await Upd.detectWebBuild({ perf, doc: null, fetchImpl: () => Promise.reject(new Error('offline')) })) === null, 'offline check is silent');
+
+  const docLike = { querySelectorAll: () => [{ getAttribute: () => './assets/index-FROMDOM.js' }] };
+  ok(Upd.runningAssetName(docLike, { getEntriesByType: () => [] }) === 'index-FROMDOM.js', 'falls back to <script src>');
+  ok(Upd.runningAssetName({ querySelectorAll: () => [] }, { getEntriesByType: () => [] }) === '', 'nothing to detect → empty');
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} feature checks passed`);

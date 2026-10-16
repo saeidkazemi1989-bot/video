@@ -18,6 +18,15 @@ export const state = {
   lastLibrary: null,          // last generated track config (genre/seed/tempo)
   subtitleSource: null,       // { text, segmentsByAsset, method }
   editorIndex: 0,             // selected shot in the manual editor
+  update: {                   // «بروزرسانی» state (see core/update.js)
+    mode: 'web',              // 'web' | 'android' | 'ios'
+    checking: false,
+    available: false,         // a newer version exists online
+    webReady: false,          // a new service worker is waiting to take over
+    latest: null,
+    error: '',
+    checkedAt: 0,
+  },
   busy: false,
 };
 
@@ -43,6 +52,7 @@ export async function loadPrefs() {
   if (!prefs) return;
   if (prefs.presetId) state.presetId = prefs.presetId;
   if (prefs.settings) state.settings = { ...state.settings, ...prefs.settings };
+  if (state.settings.autoUpdateCheck === undefined) state.settings.autoUpdateCheck = true;
   if (prefs.ai) state.ai = { ...state.ai, ...prefs.ai };
 }
 

@@ -1,5 +1,20 @@
 apply plugin: 'com.android.application'
 
+// ---- ReelForge version bridge (package.json is the single source of truth) ----
+def reelforgePkg() {
+    def f = file("$rootDir/../package.json")
+    return f.exists() ? new groovy.json.JsonSlurper().parseText(f.text) : [version: '1.0.0']
+}
+def reelforgeVersionName() {
+    def v = (reelforgePkg().version ?: '1.0.0').toString()
+    return v.replaceAll(/[^0-9.].*$/, '') ?: '1.0.0'
+}
+def reelforgeVersionCode() {
+    def code = 0
+    reelforgeVersionName().tokenize('.').each { part -> code = code * 100 + (part.isInteger() ? part.toInteger() : 0) }
+    return code > 0 ? code : 1
+}
+
 android {
     namespace = "app.reelforge.reel"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +22,10 @@ android {
         applicationId "app.reelforge.reel"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // نسخه از package.json خوانده می‌شود تا APK و اپ همیشه یکی باشند
+        // (1.2.0 → versionCode 10200) — همین باعث می‌شود اندروید نسخهٔ جدید را «بروزرسانی» بشناسد.
+        versionCode reelforgeVersionCode()
+        versionName reelforgeVersionName()
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

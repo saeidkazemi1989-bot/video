@@ -41,6 +41,9 @@ const html = (files) => `<!doctype html>
           padding:16px; border-radius:14px; color:#160b22;
           background:linear-gradient(135deg,#ff5fa2,#ffb457) }
   a.btn + a.btn { margin-top:10px; background:linear-gradient(135deg,#8b5cf6,#22d3ee) }
+  button.refresh { display:block; width:100%; margin:12px 0 0; padding:13px; border-radius:14px; cursor:pointer;
+          font: inherit; font-weight:600; color:#e9e3ff; background:#241c3a; border:1px solid #3a2f57 }
+  button.refresh:active { transform:scale(.985) }
   small { display:block; margin-top:18px; color:#8d84a8; line-height:1.9 }
   ol { color:#b9b0d4; line-height:2; font-size:14px; padding-inline-start:20px; margin:14px 0 0 }
 </style></head><body><div class="card">
@@ -49,6 +52,7 @@ const html = (files) => `<!doctype html>
   ${files.length
     ? files.map((f) => `<a class="btn" href="/${encodeURIComponent(f.name)}" download>⬇️ دانلود ${f.name} (${(f.size / 1048576).toFixed(1)} مگابایت)</a>`).join('\n  ')
     : '<p>فایلی برای دانلود پیدا نشد.</p>'}
+  <button class="refresh" onclick="location.reload()">🔄 بروزرسانی فهرست</button>
   <ol>
     <li>فایل را باز کن؛ اگر پیام «نصب از منابع ناشناس» آمد، اجازه بده.</li>
     <li>بعد از نصب، اولین اجرا کمی طول می‌کشد (فونت و موتور را بارگذاری می‌کند).</li>

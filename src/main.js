@@ -9,6 +9,7 @@ import '@fontsource/vazirmatn/900.css';
 import { state, loadPrefs, savePrefs } from './state.js';
 import { setRouter, go, renderChrome, toast } from './ui/shell.js';
 import { openSettingsSheet } from './ui/settingsSheet.js';
+import { initUpdates, openUpdateSheet } from './ui/updateSheet.js';
 import { renderMediaScreen } from './ui/mediaScreen.js';
 import { renderStyleScreen } from './ui/styleScreen.js';
 import { renderTextScreen } from './ui/textScreen.js';
@@ -84,6 +85,7 @@ function boot() {
     go(state.step - 1);
   };
   $('#btn-settings').onclick = () => openSettingsSheet(() => rerender());
+  $('#btn-update').onclick = () => openUpdateSheet();
   $('#busy').addEventListener('click', (e) => { if (e.target.id === 'busy') { /* keep the overlay */ } });
 
   document.querySelectorAll('.stepper__item').forEach((node) => {
@@ -107,16 +109,14 @@ function boot() {
 
   // keep prefs in sync
   window.addEventListener('pagehide', () => { savePrefs(); });
+
+  // «بروزرسانی»: register the service worker, watch for new builds, silent check
+  initUpdates().catch(() => {});
 }
 
 loadPrefs().finally(boot);
 
-// PWA: install the service worker only for production builds
-if (import.meta.env?.PROD && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
-  });
-}
+// (the service worker is registered by initUpdates() inside boot())
 
 // warn before losing media-heavy work
 window.addEventListener('beforeunload', (e) => {

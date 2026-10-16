@@ -66,6 +66,17 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
   transition: transform 0.12s ease, background 0.2s;
 }
 .iconbtn:active { transform: scale(0.93); background: var(--card-2); }
+.appbar__side--end { width: auto; gap: 6px; }
+.iconbtn--update { position: relative; color: var(--ok); border-color: rgba(34, 211, 154, 0.45); }
+.iconbtn--update .dot {
+  position: absolute; top: -2px; inset-inline-end: -2px; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--grad); animation: updatePulse 1.7s ease-in-out infinite;
+}
+@keyframes updatePulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) { .iconbtn--update .dot { animation: none; } }
 
 /* ---------- stepper ---------- */
 .stepper { display: flex; gap: 6px; padding: 10px 12px 4px; overflow-x: auto; }
