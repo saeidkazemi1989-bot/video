@@ -36,6 +36,7 @@ export const DEFAULT_SETTINGS = {
   subtitleStyle: 'plain',
   autoUpdateCheck: true,   // silently look for a newer build on start-up
   updateUrl: '',           // optional self-hosted update manifest ({version, apk})
+  orientationManual: 'auto', // 'auto' = measured per device | 'flip' = invert it by hand
   brief: '',               // «هدف کلیپ» — one sentence about what the clip is for
   briefPlan: null,         // what analyzeBrief() decided from it (for the UI + report)
 };

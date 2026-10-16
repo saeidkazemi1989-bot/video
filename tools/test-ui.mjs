@@ -529,6 +529,26 @@ console.log('\n▸ device report sheet');
   ok(sheet.textContent.includes('کدگذار ویدیو'), 'report lists the encoder capability');
   ok([...sheet.querySelectorAll('button')].some((b) => b.textContent.includes('کپی گزارش')), 'report can be copied');
   ok([...sheet.querySelectorAll('button')].some((b) => b.textContent.includes('بستن')), 'sheet can be closed');
+
+  // «جهت تصویر»: the row, the re-check button and the manual escape hatch
+  ok(sheet.textContent.includes('جهت تصویر'), 'the report shows the media orientation state', sheet.textContent.slice(0, 120));
+  const orientBtn = [...sheet.querySelectorAll('button')].find((b) => b.textContent.includes('بررسی و رفع جهت تصویر'));
+  ok(orientBtn !== undefined, 'a button re-measures the orientation on the spot');
+  orientBtn.dispatchEvent(new window.Event('click'));
+  await new Promise((r) => setTimeout(r, 40));
+  ok(document.getElementById('toast-host').textContent.length > 0, 'the re-check reports its result to the user');
+  ok(sheet.textContent.includes('جهت تصویر'), 'and the sheet stays alive afterwards');
+  const manualChips = [...sheet.querySelectorAll('.chip')].filter((c) => c.textContent.includes('برعکس کن') || c.textContent.includes('خودکار'));
+  ok(manualChips.length === 2, 'the manual override offers «خودکار» and «برعکس کن»', String(manualChips.length));
+  const flipChip = manualChips.find((c) => c.textContent.includes('برعکس کن'));
+  flipChip.dispatchEvent(new window.Event('click'));
+  await new Promise((r) => setTimeout(r, 40));
+  ok(state.settings.orientationManual === 'flip', 'the manual override is stored', String(state.settings.orientationManual));
+  ok(state.orientationFix?.manual === true, 'and it is marked as manual in the applied fix', JSON.stringify(state.orientationFix && { flipY: state.orientationFix.flipY, manual: state.orientationFix.manual }));
+  const autoChip = [...sheet.querySelectorAll('.chip')].find((c) => c.textContent.includes('خودکار'));
+  autoChip.dispatchEvent(new window.Event('click'));
+  await new Promise((r) => setTimeout(r, 40));
+  ok(state.settings.orientationManual === 'auto' && state.orientationFix?.manual !== true, 'and can be turned back to automatic');
   closeSheet();
 }
 

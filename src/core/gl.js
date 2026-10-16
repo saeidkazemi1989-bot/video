@@ -28,6 +28,7 @@ uniform vec2  uRes;          // output resolution (px)
 uniform vec2  uSrcSize;      // source resolution (px)
 uniform float uCoverScale;   // source px -> canvas px
 uniform vec2  uCoverCenter;  // CENTRE of the visible src region (src px, top-down)
+uniform float uFlipY;        // 1 = this device stores the texture bottom-up (see below)
 uniform float uZoom;
 uniform vec2  uPan;          // canvas px
 uniform float uRot;
@@ -84,6 +85,11 @@ vec2 mapUv(vec2 cv, out float inside){
   // own centre — passing the top-left corner here shifts the crop by half a window.
   vec2 srcPx = p / uCoverScale + uCoverCenter;
   vec2 uv = srcPx / uSrcSize;
+  // Some drivers (Android/ANGLE, and *differently* for video vs image sources) do not
+  // honour UNPACK_FLIP_Y_WEBGL, so the stored texture can be either way up. The app
+  // measures which one it is with probeRenderOrientation() and flips here instead of
+  // trusting the driver — that is why a photo could be upright while a video was not.
+  uv.y = mix(uv.y, 1.0 - uv.y, uFlipY);
   inside = (uv.x > -0.002 && uv.x < 1.002 && uv.y > -0.002 && uv.y < 1.002) ? 1.0 : 0.0;
   return uv;
 }
@@ -91,7 +97,9 @@ vec2 mapUv(vec2 cv, out float inside){
 // The previous shot is snapshotted *after* compositing, so it lives in output uv space
 // (0..1 of the canvas) — no cover mapping needed, just the parallax offset.
 vec3 fetchPrev(vec2 uv){
-  return texture(uPrev, clamp(uv, 0.0, 1.0)).rgb;
+  // the snapshot is a canvas too, so it is stored the same way up as the current frame
+  vec2 fuv = vec2(uv.x, mix(uv.y, 1.0 - uv.y, uFlipY));
+  return texture(uPrev, clamp(fuv, 0.0, 1.0)).rgb;
 }
 
 vec3 grade(vec3 col, vec2 uv){
@@ -291,7 +299,7 @@ function compile(gl, type, src) {
   return s;
 }
 
-export function createGLRenderer(canvas) {
+export function createGLRenderer(canvas, { flipY = 0 } = {}) {
   const gl = canvas.getContext('webgl2', {
     alpha: false,
     antialias: false,
@@ -326,6 +334,9 @@ export function createGLRenderer(canvas) {
   // this shader (and every offset the JS passes) assumes. Without it the frame comes
   // out mirrored vertically — i.e. «۱۸۰ درجه چرخیده».
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  // …and this is what every upload actually relies on, because the driver flag above
+  // is applied inconsistently (image sources flip, video frames often do not).
+  let flipYValue = flipY ? 1 : 0;
 
   const quad = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -336,7 +347,7 @@ export function createGLRenderer(canvas) {
 
   const U = {};
   const names = [
-    'uRes', 'uSrcSize', 'uCoverScale', 'uCoverCenter', 'uZoom', 'uPan', 'uRot', 'uFocus',
+    'uRes', 'uSrcSize', 'uCoverScale', 'uCoverCenter', 'uFlipY', 'uZoom', 'uPan', 'uRot', 'uFocus',
     'uLift', 'uGain', 'uExposure', 'uContrast', 'uSat', 'uVibrance', 'uTemp', 'uTint', 'uGamma',
     'uFade', 'uVignette', 'uGrain', 'uSharpen', 'uChroma', 'uBloom', 'uScan', 'uHue', 'uLetterbox', 'uFraming',
     'uTime', 'uTransType', 'uTrans', 'uTransDir', 'uHasPrev', 'uTex', 'uPrev',
@@ -369,8 +380,17 @@ export function createGLRenderer(canvas) {
   function upload(textureUnit, texture, source) {
     gl.activeTexture(textureUnit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
+    // re-assert: this is global context state and every upload depends on it
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    // A <video> is the one source type whose texture layout the driver decides on its
+    // own (the decoder hands over a hardware frame). Drawing the frame into a canvas
+    // first — the exact path photos and the self-test already use — makes preview and
+    // export agree with each other and with the photos. One blit per rendered frame.
+    const src = isVideoSource(source)
+      ? (drawSourceToScratch(source, canvas.ownerDocument) || source)
+      : source;
     try {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
     } catch (e) {
       // some sources (video without a decoded frame) throw; keep the old texture
     }
@@ -379,6 +399,9 @@ export function createGLRenderer(canvas) {
   return {
     gl,
     canvas,
+    /** 1 = this device stores textures bottom-up; measured by probeRenderOrientation. */
+    setFlipY(v) { flipYValue = v ? 1 : 0; },
+    get flipY() { return flipYValue; },
     resize(w, h) {
       if (canvas.width !== w) canvas.width = w;
       if (canvas.height !== h) canvas.height = h;
@@ -424,6 +447,7 @@ export function createGLRenderer(canvas) {
       gl.uniform2f(U.uSrcSize, srcWidth, srcHeight);
       gl.uniform1f(U.uCoverScale, scale);
       gl.uniform2f(U.uCoverCenter, ox + visW / 2, oy + visH / 2);
+      gl.uniform1f(U.uFlipY, flipYValue);
       gl.uniform1f(U.uZoom, zoom);
       gl.uniform2f(U.uPan, pan[0], pan[1]);
       gl.uniform1f(U.uRot, rotation);
@@ -460,6 +484,36 @@ export function createGLRenderer(canvas) {
       return true;
     },
   };
+}
+
+/** True for <video> (and VideoFrame) sources, whatever wrapper they arrive in. */
+export function isVideoSource(source) {
+  if (!source) return false;
+  if (source.nodeName === 'VIDEO') return true;
+  return typeof source.videoWidth === 'number' && typeof source.play === 'function';
+}
+
+let scratchCanvas = null;
+/**
+ * Draws one video frame into a reusable canvas of the source's own size.
+ * @returns {HTMLCanvasElement|null} null when the frame is not ready yet.
+ */
+export function drawSourceToScratch(source, doc, size = null) {
+  if (!doc?.createElement) return null;
+  const w = Math.round(size?.w || source.videoWidth || source.width || 0);
+  const h = Math.round(size?.h || source.videoHeight || source.height || 0);
+  if (!w || !h) return null;
+  if (!scratchCanvas || scratchCanvas.ownerDocument !== doc) scratchCanvas = doc.createElement('canvas');
+  if (scratchCanvas.width !== w) scratchCanvas.width = w;
+  if (scratchCanvas.height !== h) scratchCanvas.height = h;
+  const ctx = scratchCanvas.getContext?.('2d', { alpha: false });
+  if (!ctx?.drawImage) return null;
+  try {
+    ctx.drawImage(source, 0, 0, w, h);
+  } catch {
+    return null;      // frame not decoded yet — the previous texture stays on screen
+  }
+  return scratchCanvas;
 }
 
 /** A do-nothing grade, used by the orientation self-test. */

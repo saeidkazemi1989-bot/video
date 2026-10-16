@@ -1,7 +1,7 @@
 /** «وضعیت دستگاه» sheet — capability report the user can copy and send. */
 import { el, faNum, copyText } from '../core/util.js';
 import { state } from '../state.js';
-import { briefReport } from '../project.js';
+import { briefReport, orientationStatus, checkOrientation, patchSettings } from '../project.js';
 import { openSheet, btn, toast } from './shell.js';
 import { deviceReport, reportText, reportRows, lastErrors } from '../core/diag.js';
 
@@ -21,7 +21,21 @@ export function appContext() {
     music: state.music ? (state.music.generated ? `ساخت اپ (${state.music.name || ''})` : state.music.name || 'فایل خودم') : 'بدون موسیقی',
     subtitles: state.settings.subtitles ? 'روشن' : 'خاموش',
     brief: briefReport(),
+    orientation: orientationStatus(),
+    videoTexture: state.orientationFix?.videoRaw ? `راستیابی تکسچر ویدیو: ${state.orientationFix.videoRaw}${state.orientationFix.videoNote ? ` — ${state.orientationFix.videoNote}` : ''}` : '',
   };
+}
+
+const isLatin = (v) => /^[\w\s.,:()×+\/-]+$/.test(String(v));
+
+function row(label, value) {
+  return el('div', { class: 'listitem' }, [
+    el('div', { class: 'listitem__ico', text: '•' }),
+    el('div', { class: 'listitem__body' }, [
+      el('b', { text: label }),
+      el('span', { text: String(value), dir: isLatin(value) ? 'ltr' : 'rtl' }),
+    ]),
+  ]);
 }
 
 export function openDiagSheet() {
@@ -32,18 +46,33 @@ export function openDiagSheet() {
     const actions = el('div', { class: 'row' });
     box.append(actions);
 
-    (async () => {
-      const report = await deviceReport(globalThis, { context: appContext() });
+    /** The manual escape hatch — rebuilt with the body so it never disappears. */
+    const manualRow = () => el('div', { class: 'field' }, [
+      el('label', { text: 'جبران جهت تصویر (عکس و ویدیو)' }),
+      el('div', { class: 'pill-row' }, [
+        el('button', {
+          class: `chip ${state.settings.orientationManual !== 'flip' ? 'is-on' : ''}`,
+          onclick: async () => {
+            patchSettings({ orientationManual: 'auto' });
+            await checkOrientation({ force: true });
+            toast(`جهت تصویر: ${orientationStatus()}`, 'ok', 4000);
+          },
+        }, ['🧭 خودکار (اندازه‌گیری روی همین گوشی)']),
+        el('button', {
+          class: `chip ${state.settings.orientationManual === 'flip' ? 'is-on' : ''}`,
+          onclick: async () => {
+            patchSettings({ orientationManual: 'flip' });
+            const fix = await checkOrientation({ force: true });
+            toast(`جهت تصویر: ${orientationStatus()}`, fix.status === 'unfixable' ? 'warn' : 'ok', 4200);
+          },
+        }, ['↕ برعکس کن (اگر همه‌چیز وارونه بود)']),
+      ]),
+    ]);
+
+    function fill(report) {
       body.innerHTML = '';
-      for (const [label, value] of reportRows(report)) {
-        body.append(el('div', { class: 'listitem' }, [
-          el('div', { class: 'listitem__ico', text: '•' }),
-          el('div', { class: 'listitem__body' }, [
-            el('b', { text: label }),
-            el('span', { text: String(value), dir: /^[\w\s.,:()×+\/\-]+$/.test(String(value)) ? 'ltr' : 'rtl' }),
-          ]),
-        ]));
-      }
+      for (const [label, value] of reportRows(report)) body.append(row(label, value));
+      body.append(manualRow());
       const errs = lastErrors();
       if (errs.length) {
         body.append(el('div', { class: 'card' }, [
@@ -51,7 +80,27 @@ export function openDiagSheet() {
           ...errs.slice(-3).map((e) => el('div', { class: 'muted', dir: 'ltr', style: { textAlign: 'left', marginTop: '6px' }, text: `${e.where ? `${e.where} · ` : ''}${e.text}` })),
         ]));
       }
+    }
+
+    (async () => {
+      const report = await deviceReport(globalThis, { context: appContext() });
+      fill(report);
       actions.append(
+        // «جهت تصویر»: re-measure the real render path and correct it on the spot
+        btn('🔁 بررسی و رفع جهت تصویر', {
+          small: true,
+          onClick: async () => {
+            try {
+              const fix = await checkOrientation({ force: true });
+              toast(`جهت تصویر: ${orientationStatus()}`, fix.status === 'ok' || fix.status === 'fixed' ? 'ok' : 'warn', 4600);
+              const fresh = await deviceReport(globalThis, { context: appContext() });
+              fill(fresh);
+              Object.assign(report, fresh);
+            } catch (e) {
+              toast(`بررسی جهت تصویر ممکن نشد (${e.message})`, 'err', 4200);
+            }
+          },
+        }),
         btn('📋 کپی گزارش', {
           primary: true,
           onClick: async () => {

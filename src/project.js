@@ -4,6 +4,7 @@ import { buildPlan } from './core/planner.js';
 import { buildOverlays as buildOverlaysShared, attachSubtitles as attachSubtitlesShared } from './core/overlays.js';
 import { autoPreset, getPreset } from './data/styles.js';
 import { analyzeBrief, briefPatch, briefSummary, briefLine } from './core/brief.js';
+import { ensureOrientationFix, getOrientationFix, setOrientationFix, orientationReport } from './core/orientation.js';
 
 export function markDirty() { state.planDirty = true; }
 
@@ -35,6 +36,31 @@ export function currentBrief() {
   if (state.briefAnalysis?.text === text.trim()) return state.briefAnalysis;
   state.briefAnalysis = analyzeBrief(text, { lang: state.settings.lang || 'fa' });
   return state.briefAnalysis;
+}
+
+/**
+ * Measures (or re-measures) this device's texture orientation and applies it.
+ * Cheap — one 64×64 render — and it is what makes photos and videos agree.
+ */
+export async function checkOrientation({ force = false } = {}) {
+  const fix = await ensureOrientationFix({ cached: state.orientationFix, force });
+  const manual = state.settings.orientationManual === 'flip';
+  const applied = { ...fix, manual };
+  if (manual) applied.flipY = fix.flipY ? 0 : 1;
+  state.orientationFix = applied;
+  setOrientationFix(applied);
+  // live renderers (preview / editor) pick the correction up immediately
+  for (const r of state.liveRenderers || []) {
+    try { r.renderer?.setFlipY?.(applied.flipY); } catch { /* a renderer without GL ignores this */ }
+  }
+  try { await savePrefs(); } catch { /* storage full/blocked — the fix still applies */ }
+  notify();
+  return applied;
+}
+
+export function orientationStatus() {
+  const fix = state.orientationFix || getOrientationFix();
+  return `${orientationReport(fix)}${fix.manual ? ' · جبران دستی' : ''}`;
 }
 
 export function briefReport() {

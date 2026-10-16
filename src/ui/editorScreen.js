@@ -33,6 +33,7 @@ export function renderEditorScreen(root, { rerender } = {}) {
   const scale = clamp(480 / plan.width, 0.3, 1);
   const canvas = el('canvas', { style: { width: '100%', display: 'block' } });
   const renderer = new TimelineRenderer({ plan, outCanvas: canvas, scale, musicBuffer: state.music?.buffer || null });
+  state.liveRenderers = [renderer];
   const playIcon = el('div', { class: 'player__play', text: '▶' });
   const timeLabel = el('span', { class: 'player__time mono', text: `۰:۰۰ / ${fmtTime(plan.duration)}` });
   const cutBadge = el('span', { class: 'player__time', text: '' });

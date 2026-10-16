@@ -17,6 +17,8 @@ export const state = {
   ai: { provider: 'none', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', apiKey: '' },
   lastLibrary: null,          // last generated track config (genre/seed/tempo)
   briefAnalysis: null,        // what «هدف کلیپ» decided for the current sentence
+  orientationFix: null,       // learned texture flip of this device (see core/orientation.js)
+  liveRenderers: [],          // renderers to re-orient when the probe lands mid-session
   musicSpeed: null,           // measured offline-render speed of this device
   subtitleSource: null,       // { text, segmentsByAsset, method }
   editorIndex: 0,             // selected shot in the manual editor
@@ -78,6 +80,7 @@ export async function loadPrefs() {
   if (prefs.settings) state.settings = { ...state.settings, ...prefs.settings };
   if (state.settings.autoUpdateCheck === undefined) state.settings.autoUpdateCheck = true;
   if (prefs.ai) state.ai = { ...state.ai, ...prefs.ai };
+  if (prefs.orientationFix) state.orientationFix = prefs.orientationFix;
   if (migratePrefs(prefs)) await savePrefs();
 }
 
@@ -87,6 +90,7 @@ export function savePrefs() {
     presetId: state.presetId,
     settings: state.settings,
     ai: state.ai,
+    orientationFix: state.orientationFix,
   });
 }
 

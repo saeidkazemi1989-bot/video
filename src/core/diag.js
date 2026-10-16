@@ -8,7 +8,7 @@
  * Everything here is pure and injectable so it can be tested in Node.
  */
 import { APP_VERSION } from './update.js';
-import { createGLRenderer, NEUTRAL_GRADE } from './gl.js';
+import { createGLRenderer, NEUTRAL_GRADE, drawSourceToScratch } from './gl.js';
 
 const RING = 12;
 const errors = [];
@@ -163,11 +163,58 @@ export async function probeStorage(win) {
 }
 
 /**
+ * The reference pattern: four quadrants, asymmetric on both axes so a vertical
+ * mirror, a horizontal mirror and a 180° rotation are all distinguishable.
+ */
+function paintQuadrants(ctx, size) {
+  const h = size / 2;
+  const paint = (x, y, color) => { ctx.fillStyle = color; ctx.fillRect(x, y, h, h); };
+  paint(0, 0, '#ff0000');        // top-left   red
+  paint(h, 0, '#00ff00');        // top-right  green
+  paint(0, h, '#0000ff');        // bottom-l   blue
+  paint(h, h, '#ffffff');        // bottom-r   white
+}
+
+/** Renders that pattern through the real compositor and reads the corners back. */
+function renderAndClassify({ doc, source, srcSize = 16, flipY = 0, via = 'image' }) {
+  const out = doc.createElement('canvas');
+  out.width = 64; out.height = 64;
+  const renderer = createGLRenderer(out, { flipY });
+  if (!renderer) return { ok: false, reason: 'no-webgl' };
+  renderer.resize(64, 64);
+  renderer.draw({
+    source, srcWidth: srcSize, srcHeight: srcSize, grade: NEUTRAL_GRADE,
+    zoom: 1, pan: [0, 0], rotation: 0, focus: [0.5, 0.5],
+    transition: null, time: 0, letterbox: 0, framing: 0,
+  });
+  return { renderer, out };
+}
+
+function readCorners({ doc, out, renderer, flipY, via }) {
+  const grab = doc.createElement('canvas');
+  grab.width = 64; grab.height = 64;
+  const gctx = grab.getContext('2d');
+  if (!gctx?.getImageData) return { ok: false, reason: 'no-readback' };
+  gctx.drawImage(out, 0, 0);
+  const px = (x, y) => {
+    try {
+      const d = gctx.getImageData(x, y, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    } catch { return null; }
+  };
+  const corners = { topLeft: px(10, 10), topRight: px(53, 10), bottomLeft: px(10, 53), bottomRight: px(53, 53) };
+  return { ...classifyQuadrants(corners, renderer.fallback ? '2d' : 'webgl2'), flipY: renderer.flipY, via, corners };
+}
+
+/**
  * Draws a known 4-quadrant pattern through the real GL compositor and reads the
  * pixels back. This is how we prove — on the actual phone — that the shader is
  * neither flipped nor shifted, without a screenshot or a second device.
+ *
+ * @param {'image'|'video'} [opts.via] 'video' routes the pattern through the exact
+ *   canvas path a video frame takes (see drawSourceToScratch).
  */
-export async function probeRenderOrientation(win = globalThis, doc = win?.document) {
+export async function probeRenderOrientation(win = globalThis, doc = win?.document, { flipY = 0, via = 'image' } = {}) {
   if (!doc?.createElement) return { ok: false, reason: 'no-document' };
   try {
     const SRC = 16;
@@ -175,37 +222,67 @@ export async function probeRenderOrientation(win = globalThis, doc = win?.docume
     src.width = SRC; src.height = SRC;
     const sctx = src.getContext('2d');
     if (!sctx) return { ok: false, reason: 'no-2d' };
-    const paint = (x, y, w, h, color) => { sctx.fillStyle = color; sctx.fillRect(x, y, w, h); };
-    paint(0, 0, SRC / 2, SRC / 2, '#ff0000');            // top-left   red
-    paint(SRC / 2, 0, SRC / 2, SRC / 2, '#00ff00');      // top-right  green
-    paint(0, SRC / 2, SRC / 2, SRC / 2, '#0000ff');      // bottom-l   blue
-    paint(SRC / 2, SRC / 2, SRC / 2, SRC / 2, '#ffffff'); // bottom-r  white
+    paintQuadrants(sctx, SRC);
 
-    const out = doc.createElement('canvas');
-    out.width = 64; out.height = 64;
-    const renderer = createGLRenderer(out);
-    if (!renderer) return { ok: false, reason: 'no-webgl' };
-    renderer.resize(64, 64);
-    renderer.draw({
-      source: src, srcWidth: SRC, srcHeight: SRC, grade: NEUTRAL_GRADE,
-      zoom: 1, pan: [0, 0], rotation: 0, focus: [0.5, 0.5],
-      transition: null, time: 0, letterbox: 0, framing: 0,
-    });
-    const grab = doc.createElement('canvas');
-    grab.width = 64; grab.height = 64;
-    const gctx = grab.getContext('2d');
-    if (!gctx?.getImageData) return { ok: false, reason: 'no-readback' };
-    gctx.drawImage(out, 0, 0);
-    const px = (x, y) => {
-      try {
-        const d = gctx.getImageData(x, y, 1, 1).data;
-        return [d[0], d[1], d[2]];
-      } catch { return null; }
-    };
-    const corners = { topLeft: px(10, 10), topRight: px(53, 10), bottomLeft: px(10, 53), bottomRight: px(53, 53) };
-    return classifyQuadrants(corners, renderer.fallback ? '2d' : 'webgl2');
+    let source = src;
+    if (via === 'video') {
+      const scratch = drawSourceToScratch(src, doc, { w: SRC, h: SRC });
+      if (scratch) source = scratch;
+    }
+    const { renderer, out, reason } = renderAndClassify({ doc, source, srcSize: SRC, flipY, via });
+    if (!renderer) return { ok: false, reason };
+    return readCorners({ doc, out, renderer, flipY, via });
   } catch (e) {
     return { ok: false, reason: e?.message || 'probe-failed' };
+  }
+}
+
+/**
+ * The same read-back, but with a *real* <video> texture: the pattern canvas is
+ * piped through captureStream into a video element and rendered raw. That is how
+ * the app found out that this driver flips an image upload but not a video frame —
+ * the exact reason photos were upright while videos were «۱۸۰ درجه چرخیده».
+ * Best-effort: returns {ok:false, reason} wherever captureStream is unavailable.
+ */
+export async function probeVideoOrientation(win = globalThis, doc = win?.document, { flipY = 0, timeoutMs = 1600 } = {}) {
+  if (!doc?.createElement) return { ok: false, reason: 'no-document' };
+  try {
+    const SRC = 16;
+    const src = doc.createElement('canvas');
+    src.width = SRC; src.height = SRC;
+    const sctx = src.getContext('2d');
+    if (!sctx) return { ok: false, reason: 'no-2d' };
+    paintQuadrants(sctx, SRC);
+    if (typeof src.captureStream !== 'function') return { ok: false, reason: 'no-capture-stream' };
+
+    const video = doc.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    const stream = src.captureStream(10);
+    video.srcObject = stream;
+    try { await video.play?.(); } catch { /* autoplay rules — the frame may still arrive */ }
+
+    const gotFrame = await new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        video.requestVideoFrameCallback(() => { clearTimeout(timer); finish(true); });
+      } else {
+        setTimeout(() => { clearTimeout(timer); finish((video.readyState || 0) >= 2); }, Math.min(400, timeoutMs));
+      }
+    });
+    if (!gotFrame) return { ok: false, reason: 'no-video-frame' };
+
+    const w = video.videoWidth || SRC, h = video.videoHeight || SRC;
+    const { renderer, out, reason } = renderAndClassify({ doc, source: video, srcSize: w, flipY, via: 'raw-video' });
+    if (!renderer) return { ok: false, reason };
+    const result = readCorners({ doc, out, renderer, flipY, via: 'raw-video' });
+    try { video.pause?.(); } catch { /* ignore */ }
+    try { video.srcObject = null; stream.getTracks?.().forEach((t) => t.stop?.()); } catch { /* ignore */ }
+    return result;
+  } catch (e) {
+    return { ok: false, reason: e?.message || 'video-probe-failed' };
   }
 }
 
@@ -298,9 +375,13 @@ export function reportText(report = {}) {
   if (report.context) {
     const c = report.context;
     if (c.brief) rows.push(['هدف کلیپ', c.brief]);
+    if (c.orientation) rows.push(['جهت تصویر (عکس/ویدیو)', c.orientation]);
+    if (c.videoTexture) rows.push(['تکسچر ویدیو', c.videoTexture]);
     push('stage', c.stage);
     push('assets', c.assets);
     if (c.brief) push('brief', c.brief);
+    if (c.orientation) push('orientation', c.orientation);
+    if (c.videoTexture) push('video-texture', c.videoTexture);
     push('plan', [c.duration ? `duration=${c.duration}s` : '', c.framing ? `framing=${c.framing}` : '',
       c.order ? `order=${c.order}` : '', c.quality ? `quality=${c.quality}` : '', c.fps ? `fps=${c.fps}` : '',
       c.preset ? `preset=${c.preset}` : '', c.music ? `music=${c.music}` : ''].filter(Boolean).join(' '));

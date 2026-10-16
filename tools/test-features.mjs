@@ -20,6 +20,9 @@ import * as Save from '../src/core/save.js';
 import { state, migratePrefs, PREFS_VERSION } from '../src/state.js';
 import { buildSoundtrack, musicLoop } from '../src/core/audio.js';
 import * as Brief from '../src/core/brief.js';
+import * as Orient from '../src/core/orientation.js';
+import { probeRenderOrientation, probeVideoOrientation, classifyQuadrants } from '../src/core/diag.js';
+import { isVideoSource, drawSourceToScratch, createGLRenderer } from '../src/core/gl.js';
 import { PRESETS as STYLE_PRESETS, DURATIONS as STYLE_DURATIONS } from '../src/data/styles.js';
 import { TONES as COPY_TONES } from '../src/data/hooks.js';
 
@@ -1358,6 +1361,179 @@ section('pacing follows the style (fast styles really cut faster)');
     `${sport.plan.cuts.length} vs ${cine.plan.cuts.length}`);
   const auto = measured.find((m) => m.id === 'auto');
   ok(Math.abs(auto.avg - 3.12) < 0.4, 'the default («هوشمند») pacing is unchanged for existing projects', auto.avg.toFixed(2));
+}
+
+
+/* ================================================================== */
+section('videos and photos share one texture path (the «ویدیو برعکس است» bug)');
+
+{
+  // ---- what counts as a video source ----
+  ok(isVideoSource({ nodeName: 'VIDEO' }) === true, 'a <video> element is recognised');
+  ok(isVideoSource({ videoWidth: 1080, videoHeight: 1920, play() {} }) === true, 'so is a VideoFrame-like object');
+  ok(isVideoSource({ nodeName: 'IMG', videoWidth: 0 }) === false, 'an image is not a video');
+  ok(isVideoSource(null) === false, 'null is not a video');
+
+  // ---- the frame goes through a canvas, i.e. the path photos and the self-test use ----
+  const drawn = [];
+  const fakeCanvas = {
+    ownerDocument: null, width: 0, height: 0,
+    getContext: () => ({ drawImage: (src, x, y, w, h) => drawn.push({ src, x, y, w, h }) }),
+  };
+  const doc = {
+    createElement: (tag) => { fakeCanvas.ownerDocument = doc; fakeCanvas.tag = tag; return fakeCanvas; },
+  };
+  const video = { nodeName: 'VIDEO', videoWidth: 1080, videoHeight: 1920 };
+  const out = drawSourceToScratch(video, doc);
+  ok(out === fakeCanvas && fakeCanvas.tag === 'canvas', 'a video frame is drawn into a canvas');
+  ok(fakeCanvas.width === 1080 && fakeCanvas.height === 1920, 'the canvas matches the video size', `${fakeCanvas.width}x${fakeCanvas.height}`);
+  ok(drawn.length === 1 && drawn[0].src === video && drawn[0].w === 1080, 'the whole frame is blitted', JSON.stringify(drawn[0] && { w: drawn[0].w, h: drawn[0].h }));
+  ok(drawSourceToScratch({ nodeName: 'VIDEO' }, doc) === null, 'a video without a decoded frame is refused (previous texture stays)');
+  ok(drawSourceToScratch(video, null) === null, 'no document → no scratch canvas');
+  ok(drawSourceToScratch(video, doc, { w: 16, h: 16 }) === fakeCanvas && fakeCanvas.width === 16, 'the size can be forced (the self-test does)');
+  const throwing = { nodeName: 'VIDEO', videoWidth: 640, videoHeight: 480 };
+  const doc2 = { createElement: () => ({ width: 0, height: 0, getContext: () => ({ drawImage: () => { throw new Error('no frame yet'); } }) }) };
+  ok(drawSourceToScratch(throwing, doc2) === null, 'a throw from drawImage is swallowed, not fatal');
+
+  // ---- the renderer can be corrected from the outside ----
+  const src = readFileSync(new URL('../src/core/gl.js', import.meta.url), 'utf8');
+  ok(/uniform float uFlipY/.test(src), 'the shader has its own vertical flip');
+  ok(/mix\(uv\.y, 1\.0 - uv\.y, uFlipY\)/.test(src), 'mapUv applies it to the sampled uv');
+  ok(/mix\(uv\.y, 1\.0 - uv\.y, uFlipY\)/.test(src.slice(src.indexOf('fetchPrev'))), 'and so does the previous-shot lookup');
+  ok(/setFlipY\(v\)\s*\{\s*flipYValue/.test(src), 'the renderer exposes setFlipY for a live correction');
+  ok(/gl\.uniform1f\(U\.uFlipY, flipYValue\)/.test(src), 'and uploads it every frame');
+  ok(/isVideoSource\(source\)\s*\n?\s*\? \(drawSourceToScratch/.test(src), 'the texture upload routes video sources through the canvas');
+  ok(/gl\.pixelStorei\(gl\.UNPACK_FLIP_Y_WEBGL, true\)/.test(src.slice(src.indexOf('function upload'))),
+    'and re-asserts the flip flag per upload (it is global context state)');
+
+  // ---- what a read-back means ----
+  ok(Orient.decideFlipY({ ok: true }) === 0, 'an upright render needs no correction');
+  ok(Orient.decideFlipY({ ok: false, flippedY: true }) === 1, 'a vertically mirrored render is corrected by flipping v');
+  ok(Orient.decideFlipY({ ok: false, rotated180: true }) === -1, 'a true 180° rotation is reported, not "fixed" with a v-flip');
+  ok(Orient.decideFlipY({ ok: false, mirroredX: true }) === -1, 'a horizontal mirror is reported too');
+  ok(Orient.decideFlipY({ ok: false, blank: true }) === null, 'an unreadable frame keeps the previous answer');
+  ok(Orient.decideFlipY(null) === null, 'no probe result keeps the previous answer');
+
+  // ---- learning flow ----
+  Orient.resetOrientationFix();
+  const calls = [];
+  const probeFlippedThenOk = async (win, doc2, opts) => {
+    calls.push(opts);
+    if (opts.flipY === 0) return { ok: false, flippedY: true, verdict: '۱۸۰ درجه چرخیده', mode: 'webgl2' };
+    return { ok: true, verdict: 'درست', mode: 'webgl2' };
+  };
+  const fix = await Orient.ensureOrientationFix({ probe: probeFlippedThenOk, cached: null, force: true, win: {}, doc: {}, now: () => 1234 });
+  ok(fix.flipY === 1 && fix.status === 'fixed', 'a mirrored read-back switches the shader flip on', JSON.stringify(fix));
+  ok(fix.confirmed === true, 'and the corrected value is verified by a second render');
+  ok(calls[0].flipY === 0 && calls[1].flipY === 1, 'the probe is asked twice, with and without the flip', JSON.stringify(calls.map((c) => c.flipY)));
+  ok(calls.length === 3 && calls[2].via === 'video', 'the video path is measured as well', JSON.stringify(calls[2]));
+  ok(fix.testedAt === 1234, 'the measurement is timestamped');
+  ok(Orient.currentOrientationFlip() === 1, 'the renderer picks the learned value up');
+  ok(/اصلاح شد/.test(Orient.orientationReport(fix)), 'the report says it was corrected', Orient.orientationReport(fix));
+
+  const probeOk = async () => ({ ok: true, verdict: 'درست', mode: 'webgl2' });
+  Orient.resetOrientationFix();
+  const ok2 = await Orient.ensureOrientationFix({ probe: probeOk, force: true, win: {}, doc: {} });
+  ok(ok2.flipY === 0 && ok2.status === 'ok', 'an upright device is left alone');
+  ok(/درست/.test(Orient.orientationReport(ok2)), 'and reported as correct', Orient.orientationReport(ok2));
+
+  // a device with no WebGL at all must not be "fixed" blindly
+  Orient.resetOrientationFix();
+  const dead = await Orient.ensureOrientationFix({ probe: async () => ({ ok: false, reason: 'no-webgl' }), force: true, win: {}, doc: {} });
+  ok(dead.flipY === 0 && dead.status === 'untested', 'no WebGL → nothing is flipped on a guess', JSON.stringify(dead));
+  ok(/بررسی نشد/.test(Orient.orientationReport(dead)), 'and the report says it could not be measured', Orient.orientationReport(dead));
+
+  // a cached answer is reused instead of re-rendering on every launch
+  const cached = { flipY: 1, status: 'fixed', testedAt: 99 };
+  let probed = 0;
+  const reuse = await Orient.ensureOrientationFix({ probe: async () => { probed++; return { ok: true }; }, cached, win: {}, doc: {} });
+  ok(reuse.flipY === 1 && probed === 0, 'a stored measurement is used without probing again');
+  const forced = await Orient.ensureOrientationFix({ probe: async () => { probed++; return { ok: true }; }, cached, force: true, win: {}, doc: {} });
+  ok(probed > 0 && forced.flipY === 0, 'but «بررسی دوباره» re-measures and corrects it');
+
+  // unreachable probe (no document) must not throw
+  const noDoc = await Orient.ensureOrientationFix({ probe: async () => ({ ok: false, reason: 'no-document' }), force: true, win: {}, doc: undefined });
+  ok(noDoc.status === 'untested', 'a probe that cannot run is reported, never fatal', JSON.stringify(noDoc));
+  Orient.resetOrientationFix();
+}
+
+
+/* ================================================================== */
+section('the video texture path is measured, not assumed');
+
+{
+  // A fake <video> wired to a fake captureStream, and a fake 2D canvas whose
+  // drawImage lets the probe "see" the pattern. Node has no WebGL, so the render
+  // itself reports no-webgl — what we verify here is the *plumbing*: that the probe
+  // reaches the video element, plays it, waits for a frame and asks the renderer with
+  // that element as the texture source.
+  const calls = { createElement: [], play: 0, drawImage: [], rendered: [] };
+  const makeDoc = () => {
+    const doc = {
+      createElement(tag) {
+        calls.createElement.push(tag);
+        return {
+          tag, ownerDocument: doc, width: 0, height: 0, readyState: 2, videoWidth: 16, videoHeight: 16,
+          style: {}, muted: false, playsInline: false, srcObject: null,
+          getContext: () => ({
+            fillRect: () => {},
+            drawImage: (...a) => calls.drawImage.push(a),
+            getImageData: () => ({ data: new Uint8ClampedArray(4) }),
+          }),
+          captureStream: () => ({ getTracks: () => [{ stop() {} }] }),
+          play: () => { calls.play++; return Promise.resolve(); },
+          pause() {},
+          requestVideoFrameCallback: (cb) => { setTimeout(cb, 0); },
+        };
+      },
+      body: { append() {} },
+    };
+    return doc;
+  };
+
+  const doc = makeDoc();
+  const res = await probeVideoOrientation({}, doc, { flipY: 0, timeoutMs: 50 });
+  ok(calls.createElement.includes('video'), 'a video element is created for the raw-texture probe');
+  ok(calls.play === 1, 'it is played so a frame is produced');
+  ok(res.reason === 'no-webgl' && res.ok === false, 'without WebGL the probe says why instead of guessing', JSON.stringify(res));
+
+  // no captureStream (older WebView) → a clear reason, never a crash
+  const doc2 = { createElement: () => ({ width: 0, height: 0, getContext: () => ({ fillRect() {} }) }) };
+  const res2 = await probeVideoOrientation({}, doc2);
+  ok(res2.ok === false && res2.reason === 'no-capture-stream', 'a missing captureStream is reported', JSON.stringify(res2));
+  ok((await probeVideoOrientation({}, undefined)).reason === 'no-document', 'no document is reported too');
+
+  // the canvas-path probe accepts via:'video' and reports which path it used
+  const doc3 = makeDoc();
+  const imagePath = await probeRenderOrientation({}, doc3, { flipY: 0, via: 'image' });
+  ok(imagePath.via === 'image' || imagePath.reason, 'the plain probe tags its path', JSON.stringify(imagePath).slice(0, 80));
+  const videoPath = await probeRenderOrientation({}, makeDoc(), { flipY: 1, via: 'video' });
+  ok(videoPath.via === 'video' || videoPath.reason, 'the video-path probe tags its path');
+
+  // classification stays unambiguous (the pattern is asymmetric on both axes)
+  const R = [255, 0, 0], G = [0, 255, 0], B = [0, 0, 255], W = [255, 255, 255];
+  const upright = classifyQuadrants({ topLeft: R, topRight: G, bottomLeft: B, bottomRight: W });
+  ok(upright.ok === true, 'upright reads as upright');
+  ok(classifyQuadrants({ topLeft: B, topRight: W, bottomLeft: R, bottomRight: G }).flippedY === true,
+    'an upside-down frame is flippedY (fixed by the shader v-flip)');
+  ok(classifyQuadrants({ topLeft: W, topRight: B, bottomLeft: G, bottomRight: R }).rotated180 === true,
+    'a true 180° is rotated180 (not fixable with a v-flip)');
+  ok(classifyQuadrants({ topLeft: G, topRight: R, bottomLeft: W, bottomRight: B }).mirroredX === true,
+    'a horizontal mirror is mirroredX');
+
+  // and the learning flow records both video measurements
+  const seen = [];
+  const fix = await Orient.ensureOrientationFix({
+    win: {}, doc: {},
+    probe: async (w, d, o = {}) => { seen.push(`probe:${o.via || 'image'}:${o.flipY}`); return { ok: true, verdict: 'درست', mode: 'webgl2' }; },
+    videoProbe: async () => ({ ok: false, flippedY: true, verdict: '۱۸۰ درجه چرخیده' }),
+    force: true, now: () => 5,
+  });
+  ok(fix.videoRaw === '۱۸۰ درجه چرخیده', 'the raw video texture verdict is kept', String(fix.videoRaw));
+  ok(!!fix.videoNote, 'and explained in words', fix.videoNote);
+  ok(seen.includes('probe:video:0'), 'the canvas path a video frame now takes is probed too', seen.join(','));
+  ok(/درست/.test(Orient.orientationReport(fix)), 'the report still leads with the overall verdict');
+  Orient.resetOrientationFix();
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} feature checks passed`);

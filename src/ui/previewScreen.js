@@ -28,6 +28,7 @@ export function renderPreviewScreen(root, { rerender } = {}) {
     scale,
     musicBuffer: state.music?.buffer || null,
   });
+  state.liveRenderers = [renderer];      // the probe may correct the flip while this is on screen
 
   const playIcon = el('div', { class: 'player__play', text: '▶' });
   const timeLabel = el('span', { class: 'player__time mono', text: `۰:۰۰ / ${fmtTime(plan.duration)}` });

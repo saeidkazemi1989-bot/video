@@ -17,7 +17,8 @@ import { renderMusicScreen } from './ui/musicScreen.js';
 import { renderPreviewScreen, disposePreview } from './ui/previewScreen.js';
 import { renderEditorScreen } from './ui/editorScreen.js';
 import { renderExportScreen } from './ui/exportScreen.js';
-import { ensurePlan } from './project.js';
+import { ensurePlan, checkOrientation } from './project.js';
+import { setOrientationFix } from './core/orientation.js';
 import { ensureFonts } from './core/text.js';
 import { recordError, deviceReport, reportText } from './core/diag.js';
 import { appContext } from './ui/diagSheet.js';
@@ -141,6 +142,17 @@ function boot() {
 
   // «بروزرسانی»: register the service worker, watch for new builds, silent check
   initUpdates().catch(() => {});
+
+  // «جهت تصویر»: photos and videos must agree. Apply what this device already
+  // learned, then (re)measure the real render path in the background — when the
+  // read-back says a frame is mirrored, the shader flip is corrected on the spot.
+  if (state.orientationFix) setOrientationFix(state.orientationFix);
+  checkOrientation()
+    .then((fix) => {
+      if (fix?.status === 'fixed') toast('جهت تصویر این گوشی اندازه‌گیری و اصلاح شد — عکس و ویدیو یکسان نمایش داده می‌شوند', 'ok', 4200);
+      else if (fix?.status === 'unfixable') toast(`جهت تصویر: ${fix.note || 'نامتعارف'} — گزارش دستگاه را بفرست`, 'warn', 5000);
+    })
+    .catch((e) => console.warn('[reelforge] orientation probe failed', e));
 }
 
 loadPrefs().finally(boot);
