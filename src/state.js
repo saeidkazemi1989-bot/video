@@ -16,6 +16,7 @@ export const state = {
   seed: Math.floor(Math.random() * 99999),
   ai: { provider: 'none', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', apiKey: '' },
   lastLibrary: null,          // last generated track config (genre/seed/tempo)
+  musicSpeed: null,           // measured offline-render speed of this device
   subtitleSource: null,       // { text, segmentsByAsset, method }
   editorIndex: 0,             // selected shot in the manual editor
   update: {                   // «بروزرسانی» state (see core/update.js)

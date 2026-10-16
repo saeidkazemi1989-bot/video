@@ -9,7 +9,10 @@ export const VERT_SRC = `#version 300 es
 in vec2 aPos;
 out vec2 vUv;
 void main(){
-  vUv = aPos * 0.5 + 0.5;
+  // uv is *top-down* like a DOM image and like the analysis focus coordinates:
+  // (0,0) = top-left of the frame. aPos.y = +1 is the top of the frame in clip
+  // space, so the y axis is flipped here on purpose.
+  vUv = vec2(aPos.x, -aPos.y) * 0.5 + 0.5;
   gl_Position = vec4(aPos, 0.0, 1.0);
 }`;
 
@@ -24,7 +27,7 @@ uniform sampler2D uPrev;
 uniform vec2  uRes;          // output resolution (px)
 uniform vec2  uSrcSize;      // source resolution (px)
 uniform float uCoverScale;   // source px -> canvas px
-uniform vec2  uCoverOffset;  // top-left of visible src region (src px)
+uniform vec2  uCoverCenter;  // CENTRE of the visible src region (src px, top-down)
 uniform float uZoom;
 uniform vec2  uPan;          // canvas px
 uniform float uRot;
@@ -77,7 +80,9 @@ vec2 mapUv(vec2 cv, out float inside){
   p /= uZoom;
   float cs = cos(uRot), sn = sin(uRot);
   p = mat2(cs, -sn, sn, cs) * p;
-  vec2 srcPx = p / uCoverScale + uCoverOffset;
+  // p is measured from the centre of the frame, so the window is anchored by its
+  // own centre — passing the top-left corner here shifts the crop by half a window.
+  vec2 srcPx = p / uCoverScale + uCoverCenter;
   vec2 uv = srcPx / uSrcSize;
   inside = (uv.x > -0.002 && uv.x < 1.002 && uv.y > -0.002 && uv.y < 1.002) ? 1.0 : 0.0;
   return uv;
@@ -316,6 +321,12 @@ export function createGLRenderer(canvas) {
   }
   gl.useProgram(prog);
 
+  // Image / video / canvas pixels are top-down, GL textures are bottom-up. Flipping
+  // the upload makes texture coordinate 0 the *top* row, which is what every uv in
+  // this shader (and every offset the JS passes) assumes. Without it the frame comes
+  // out mirrored vertically — i.e. «۱۸۰ درجه چرخیده».
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
   const quad = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
@@ -325,7 +336,7 @@ export function createGLRenderer(canvas) {
 
   const U = {};
   const names = [
-    'uRes', 'uSrcSize', 'uCoverScale', 'uCoverOffset', 'uZoom', 'uPan', 'uRot', 'uFocus',
+    'uRes', 'uSrcSize', 'uCoverScale', 'uCoverCenter', 'uZoom', 'uPan', 'uRot', 'uFocus',
     'uLift', 'uGain', 'uExposure', 'uContrast', 'uSat', 'uVibrance', 'uTemp', 'uTint', 'uGamma',
     'uFade', 'uVignette', 'uGrain', 'uSharpen', 'uChroma', 'uBloom', 'uScan', 'uHue', 'uLetterbox', 'uFraming',
     'uTime', 'uTransType', 'uTrans', 'uTransDir', 'uHasPrev', 'uTex', 'uPrev',
@@ -412,7 +423,7 @@ export function createGLRenderer(canvas) {
       gl.uniform2f(U.uRes, w, h);
       gl.uniform2f(U.uSrcSize, srcWidth, srcHeight);
       gl.uniform1f(U.uCoverScale, scale);
-      gl.uniform2f(U.uCoverOffset, ox, oy);
+      gl.uniform2f(U.uCoverCenter, ox + visW / 2, oy + visH / 2);
       gl.uniform1f(U.uZoom, zoom);
       gl.uniform2f(U.uPan, pan[0], pan[1]);
       gl.uniform1f(U.uRot, rotation);
@@ -450,6 +461,13 @@ export function createGLRenderer(canvas) {
     },
   };
 }
+
+/** A do-nothing grade, used by the orientation self-test. */
+export const NEUTRAL_GRADE = {
+  lift: [0, 0, 0], gain: [1, 1, 1], exposure: 1, contrast: 1, saturation: 1, vibrance: 0,
+  temperature: 0, tint: 0, gamma: 1, fade: 0, vignette: 0, grain: 0, sharpen: 0,
+  chroma: 0, bloom: 0, scanlines: 0, hueShift: 0, letterbox: 0,
+};
 
 /** 2D-canvas fallback compositor (no WebGL available). */
 export function create2DRenderer(canvas) {

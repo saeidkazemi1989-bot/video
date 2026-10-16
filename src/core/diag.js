@@ -8,6 +8,7 @@
  * Everything here is pure and injectable so it can be tested in Node.
  */
 import { APP_VERSION } from './update.js';
+import { createGLRenderer, NEUTRAL_GRADE } from './gl.js';
 
 const RING = 12;
 const errors = [];
@@ -24,6 +25,7 @@ export const lastErrors = () => errors.slice();
 
 const renders = [];
 const saves = [];
+const music = [];
 
 /** Remembers how the last export went (frames, wall time, effective fps). */
 export function recordRender(stats = {}) {
@@ -42,6 +44,25 @@ export function recordRender(stats = {}) {
   return entry;
 }
 export const lastRenders = () => renders.slice();
+
+/** Remembers how the last music build went (device speed, plan, phase, error). */
+export function recordMusicBuild(stats = {}) {
+  const entry = {
+    genre: stats.genre || '',
+    wanted: Number(stats.wanted) || 0,
+    seconds: Math.round((Number(stats.ms) || 0) / 100) / 10,
+    speed: stats.speed ? Math.round(stats.speed * 10) / 10 : null,
+    plan: stats.plan || '',
+    phase: stats.phase || '',
+    ok: stats.ok !== false,
+    error: stats.error || '',
+    at: Date.now(),
+  };
+  music.push(entry);
+  if (music.length > 3) music.shift();
+  return entry;
+}
+export const lastMusicBuilds = () => music.slice();
 
 /** Remembers where the last file went (so a report proves whether saving worked). */
 export function recordSave(result = {}) {
@@ -141,6 +162,78 @@ export async function probeStorage(win) {
   }
 }
 
+/**
+ * Draws a known 4-quadrant pattern through the real GL compositor and reads the
+ * pixels back. This is how we prove — on the actual phone — that the shader is
+ * neither flipped nor shifted, without a screenshot or a second device.
+ */
+export async function probeRenderOrientation(win = globalThis, doc = win?.document) {
+  if (!doc?.createElement) return { ok: false, reason: 'no-document' };
+  try {
+    const SRC = 16;
+    const src = doc.createElement('canvas');
+    src.width = SRC; src.height = SRC;
+    const sctx = src.getContext('2d');
+    if (!sctx) return { ok: false, reason: 'no-2d' };
+    const paint = (x, y, w, h, color) => { sctx.fillStyle = color; sctx.fillRect(x, y, w, h); };
+    paint(0, 0, SRC / 2, SRC / 2, '#ff0000');            // top-left   red
+    paint(SRC / 2, 0, SRC / 2, SRC / 2, '#00ff00');      // top-right  green
+    paint(0, SRC / 2, SRC / 2, SRC / 2, '#0000ff');      // bottom-l   blue
+    paint(SRC / 2, SRC / 2, SRC / 2, SRC / 2, '#ffffff'); // bottom-r  white
+
+    const out = doc.createElement('canvas');
+    out.width = 64; out.height = 64;
+    const renderer = createGLRenderer(out);
+    if (!renderer) return { ok: false, reason: 'no-webgl' };
+    renderer.resize(64, 64);
+    renderer.draw({
+      source: src, srcWidth: SRC, srcHeight: SRC, grade: NEUTRAL_GRADE,
+      zoom: 1, pan: [0, 0], rotation: 0, focus: [0.5, 0.5],
+      transition: null, time: 0, letterbox: 0, framing: 0,
+    });
+    const grab = doc.createElement('canvas');
+    grab.width = 64; grab.height = 64;
+    const gctx = grab.getContext('2d');
+    if (!gctx?.getImageData) return { ok: false, reason: 'no-readback' };
+    gctx.drawImage(out, 0, 0);
+    const px = (x, y) => {
+      try {
+        const d = gctx.getImageData(x, y, 1, 1).data;
+        return [d[0], d[1], d[2]];
+      } catch { return null; }
+    };
+    const corners = { topLeft: px(10, 10), topRight: px(53, 10), bottomLeft: px(10, 53), bottomRight: px(53, 53) };
+    return classifyQuadrants(corners, renderer.fallback ? '2d' : 'webgl2');
+  } catch (e) {
+    return { ok: false, reason: e?.message || 'probe-failed' };
+  }
+}
+
+const EXPECTED = { topLeft: [255, 0, 0], topRight: [0, 255, 0], bottomLeft: [0, 0, 255], bottomRight: [255, 255, 255] };
+const near = (c, t, tol = 70) => Array.isArray(c) && Math.abs(c[0] - t[0]) < tol && Math.abs(c[1] - t[1]) < tol && Math.abs(c[2] - t[2]) < tol;
+
+/** Decides what a read-back of the test pattern means (pure → unit-tested). */
+export function classifyQuadrants(corners = {}, mode = 'webgl2') {
+  const got = (k) => corners[k];
+  const ok = Object.keys(EXPECTED).every((k) => near(got(k), EXPECTED[k]));
+  const swappedY = { topLeft: 'bottomLeft', bottomLeft: 'topLeft', topRight: 'bottomRight', bottomRight: 'topRight' };
+  const swappedX = { topLeft: 'topRight', topRight: 'topLeft', bottomLeft: 'bottomRight', bottomRight: 'bottomLeft' };
+  const flippedY = Object.keys(EXPECTED).every((k) => near(got(k), EXPECTED[swappedY[k]]));
+  const mirroredX = Object.keys(EXPECTED).every((k) => near(got(k), EXPECTED[swappedX[k]]));
+  const rotated180 = Object.keys(EXPECTED).every((k) => near(got(k), EXPECTED[swappedY[swappedX[k]]]));
+  const sawAny = Object.values(corners).some((c) => Array.isArray(c) && (c[0] || c[1] || c[2]));
+  return {
+    ok,
+    mode,
+    flippedY,
+    mirroredX,
+    rotated180,
+    blank: !sawAny && !ok,
+    corners,
+    verdict: ok ? 'درست' : rotated180 ? '۱۸۰ درجه چرخیده' : flippedY ? 'وارونه' : mirroredX ? 'آینه‌ای' : 'خوانده نشد',
+  };
+}
+
 /** One-shot snapshot of everything that decides whether rendering can work. */
 export async function deviceReport(win = globalThis, { extra = null, context = null } = {}) {
   const nav = win?.navigator || {};
@@ -151,6 +244,7 @@ export async function deviceReport(win = globalThis, { extra = null, context = n
   const storage = await probeStorage(win);
   const cap = win?.Capacitor;
   const workers = await probeServiceWorker(win);
+  const orientation = await probeRenderOrientation(win, win?.document);
 
   const report = {
     app: `ReelForge ${APP_VERSION}`,
@@ -166,10 +260,12 @@ export async function deviceReport(win = globalThis, { extra = null, context = n
     audio,
     faceDetector: typeof win?.FaceDetector !== 'undefined',
     serviceWorker: workers,
+    orientation,
     storage,
     context: context || null,
     renders: lastRenders(),
     saves: lastSaves(),
+    musicBuilds: lastMusicBuilds(),
     extras: extra,
     errors: lastErrors().slice(-4).map((e) => `${e.where ? `${e.where}: ` : ''}${e.text}`),
     at: new Date().toISOString(),
@@ -193,6 +289,11 @@ export function reportText(report = {}) {
   push('audio', `OAC=${report.audio?.offlineAudioContext ? 'yes' : 'no'}`);
   push('faceDetector', report.faceDetector ? 'native' : 'skin-blob fallback');
   push('serviceWorker', report.serviceWorker || 'unknown');
+  if (report.orientation) {
+    push('renderOrientation', report.orientation.ok
+      ? `ok (${report.orientation.mode})`
+      : `WRONG — ${report.orientation.verdict}${report.orientation.reason ? ` (${report.orientation.reason})` : ''} [${JSON.stringify(report.orientation.corners)}]`);
+  }
   if (report.storage) push('storage', `${report.storage.usageMB}/${report.storage.quotaMB} MB (browser space)`);
   if (report.context) {
     const c = report.context;
@@ -207,6 +308,9 @@ export function reportText(report = {}) {
   }
   for (const sv of report.saves || []) {
     push('save', sv.ok ? `ok · ${sv.method} · ${sv.display || sv.path || ''}` : `FAILED (${sv.error})`);
+  }
+  for (const m of report.musicBuilds || []) {
+    push('music', `${m.genre} · ${m.seconds}s · ${m.speed ? `${m.speed}x realtime · ` : ''}${m.plan}${m.ok ? '' : ` · FAILED at "${m.phase}" (${m.error})`}`);
   }
   push('ua', report.userAgent);
   if (report.extras && Object.keys(report.extras).length) push('extras', JSON.stringify(report.extras));
@@ -232,6 +336,9 @@ export function reportRows(report = {}) {
     ['صدا', report.audio?.offlineAudioContext ? 'OfflineAudioContext ✓' : 'محدود'],
     ['تشخیص چهره', report.faceDetector ? 'موتور نیتیو ✓' : 'الگوریتم داخلی (رنگ پوست)'],
     ['سرویس‌ورکر', ({ active: 'فعال', registered: 'ثبت‌شده', 'not-registered': 'غیرفعال', unsupported: 'پشتیبانی نمی‌شود' })[report.serviceWorker] || 'نامشخص'],
+    ['جهت تصویر در رندر', report.orientation
+      ? (report.orientation.ok ? `درست (${report.orientation.mode === '2d' ? 'کمپوزیتور ۲D' : 'WebGL2'})` : `اشتباه — ${report.orientation.verdict}`)
+      : 'نامشخص'],
     ['حافظهٔ ذخیره', report.storage ? `${report.storage.usageMB} از ${report.storage.quotaMB} مگابایت (فضای مرورگر)` : 'نامشخص'],
   ];
   const c = report.context;
@@ -250,6 +357,12 @@ export function reportRows(report = {}) {
   if (report.saves?.length) {
     const sv = report.saves.at(-1);
     rows.push(['آخرین ذخیره', sv.ok ? `موفق — ${sv.display || sv.path}` : `ناموفق (${sv.error})`]);
+  }
+  if (report.musicBuilds?.length) {
+    const m = report.musicBuilds.at(-1);
+    rows.push(['آخرین ساخت آهنگ', m.ok
+      ? `${m.seconds} ثانیه${m.speed ? ` (${m.speed}× سرعت واقعی)` : ''}${m.plan ? ` · ${m.plan}` : ''}`
+      : `ناموفق در «${m.phase}» — ${m.error}`]);
   }
   rows.push(['کدگذار', report.encoder?.supported ? `فعال — ${report.encoder.codec}${report.encoder.mode === 'hardware' ? ' (سخت‌افزاری)' : ''}` : 'غیرفعال']);
   return rows.filter(([, v]) => v !== undefined && v !== null && v !== '');

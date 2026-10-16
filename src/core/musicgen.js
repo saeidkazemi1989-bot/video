@@ -451,6 +451,44 @@ export async function renderWithProgress(ctx, { duration, onProgress, signal, ti
 }
 
 /**
+ * How fast can this device render audio offline? Measured once and cached, because
+ * the answer decides how long an arrangement we dare to render on it.
+ * @returns {Promise<{ok:boolean, seconds?:number, ms?:number, ratio?:number, reason?:string}>}
+ */
+export async function measureOfflineSpeed({ win = globalThis, seconds = 1.2, now = () => Date.now() } = {}) {
+  const OAC = win?.OfflineAudioContext || win?.webkitOfflineAudioContext;
+  if (!OAC) return { ok: false, reason: 'no-offline-audio' };
+  try {
+    const rate = 44100;
+    const ctx = new OAC(1, Math.ceil(seconds * rate), rate);
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    gain.gain.value = 0.2;
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(0);
+    const t0 = now();
+    await ctx.startRendering();
+    const ms = Math.max(1, now() - t0);
+    return { ok: true, seconds, ms, ratio: seconds / (ms / 1000), rate };
+  } catch (e) {
+    return { ok: false, reason: e?.message || 'offline-render-failed' };
+  }
+}
+
+/**
+ * Picks how much music to render for a device of the measured speed.
+ *   ratio = audio seconds rendered per wall-clock second.
+ * A phone that renders at 2× realtime cannot afford a 60 s track (30 s of waiting).
+ */
+export function chooseMusicPlan({ ratio = 20, wantedSeconds = 40, maxSeconds = 60 } = {}) {
+  const r = Number.isFinite(ratio) && ratio > 0 ? ratio : 20;
+  if (r < 4) return { sampleRate: 32000, seconds: clamp(Math.round(wantedSeconds), 12, 24), quality: 'light' };
+  if (r < 12) return { sampleRate: 32000, seconds: clamp(Math.round(wantedSeconds), 12, 36), quality: 'light' };
+  if (r < 30) return { sampleRate: 44100, seconds: clamp(Math.round(wantedSeconds), 12, 48), quality: 'full' };
+  return { sampleRate: 44100, seconds: clamp(Math.round(wantedSeconds), 12, maxSeconds), quality: 'full' };
+}
+
+/**
  * Generate a track.
  * @returns {Promise<{buffer: AudioBuffer, bpm:number, beats:Float32Array, energy:Float32Array, energyHz:number, bestStart:number, dropTime:number, waveform:Float32Array, duration:number}>}
  */
@@ -462,13 +500,16 @@ export async function generateTrack({
   signal,
   seconds = 0,            // how much music we actually need (0 = genre default)
   timeoutMs = 120_000,    // a phone render that outlives this is reported, not awaited forever
+  sampleRate = 44100,     // 32000 is ~27% less DSP for slow devices
 } = {}) {
   const genre = getGenre(genreId);
   const bpm = clamp(bpmOverride || genre.bpm, 60, 175);
   const rng = mulberry32(seed * 7919 + 13);
   const arrangement = buildArrangement(bpm, seconds ? clamp(seconds, 12, 96) : 96);
   const { sections, totalBars, barSec, duration } = arrangement;
-  const ctx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, Math.ceil(duration * 44100) + 4410, 44100);
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const rate = clamp(Math.round(sampleRate) || 44100, 22050, 48000);
+  const ctx = new OAC(2, Math.ceil(duration * rate) + Math.ceil(rate * 0.1), rate);
   const kit = createKit(ctx, { bpm, reverb: genre.reverb }, ctx.destination, rng);
   const progression = composeProgression(genre, rng);
   const beat = 60 / bpm;

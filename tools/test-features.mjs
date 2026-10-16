@@ -1017,5 +1017,141 @@ section('music render progress (no more parking at 90%)');
   state.settings.orderMode = 'intake';
 }
 
+
+/* ================================================================== */
+section('compositor orientation (the «۱۸۰ درجه» bug)');
+
+{
+  const glSource = readFileSync(new URL('../src/core/gl.js', import.meta.url), 'utf8');
+  const { VERT_SRC, FRAG_SRC } = await import('../src/core/gl.js');
+
+  // ---- the three changes that keep the GL path upright ----
+  ok(/-aPos\.y/.test(VERT_SRC), 'the vertex shader flips y so uv is top-down (0,0 = top-left)');
+  ok(!/vUv = aPos \* 0\.5 \+ 0\.5/.test(VERT_SRC), 'the old y-up uv mapping is gone');
+  ok(/gl\.pixelStorei\(gl\.UNPACK_FLIP_Y_WEBGL,\s*true\)/.test(glSource),
+    'DOM sources are uploaded flipped (t=0 = top row) — without this every frame is mirrored');
+  ok(/uCoverCenter/.test(FRAG_SRC) && /p \/ uCoverScale \+ uCoverCenter/.test(FRAG_SRC),
+    'the crop window is anchored by its centre, not its top-left');
+  ok(/uniform2f\(U\.uCoverCenter,\s*ox \+ visW \/ 2,\s*oy \+ visH \/ 2\)/.test(glSource),
+    'and the JS passes exactly that centre');
+
+  // ---- the shader mapping, ported to JS, must agree with the 2D compositor ----
+  // mapUv: p = (cv-0.5)*uRes; srcPx = p/uCoverScale + uCoverCenter; uv = srcPx/uSrcSize
+  // (zoom = 1, pan = 0, rot = 0 — the shader folds those in separately from coverRect)
+  const glMap = (cv, { outW, outH, srcW, srcH, centerSrc }) => {
+    const scale = Math.max(outW / srcW, outH / srcH);
+    const px = (cv[0] - 0.5) * outW / scale + centerSrc[0];
+    const py = (cv[1] - 0.5) * outH / scale + centerSrc[1];
+    return [px / srcW, py / srcH];
+  };
+  const rnd = (() => { let a = 12345; return () => ((a = (a * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff); })();
+
+  let worst = 0, worstCase = '';
+  for (let i = 0; i < 40; i++) {
+    const outW = [1080, 720, 540][i % 3];
+    const outH = Math.round(outW * 16 / 9);
+    const srcW = 800 + Math.round(rnd() * 3200);
+    const srcH = 600 + Math.round(rnd() * 3000);
+    const focus = [rnd(), rnd()];
+    const rect = coverRect(srcW, srcH, outW, outH, { focus });
+    // draw() passes the *source-pixel* centre of the visible window: ox + visW/2, with
+    // ox = -rect.x/scale (coverRect's x is the negative destination offset)
+    const centerSrc = [
+      (-rect.x + outW / 2) * srcW / rect.w,
+      (-rect.y + outH / 2) * srcH / rect.h,
+    ];
+    // sanity: that centre is inside the source, and the window covers the whole frame
+    const visW = outW / Math.max(outW / srcW, outH / srcH);
+    const visH = outH / Math.max(outW / srcW, outH / srcH);
+    if (centerSrc[0] < visW / 2 - 1e-6 || centerSrc[0] > srcW - visW / 2 + 1e-6) worst = 9, worstCase = `centre off-image ${i}`;
+    for (const cv of [[0, 0], [1, 0], [0, 1], [1, 1], [0.5, 0.5], [0.2, 0.8]]) {
+      const [uvx, uvy] = glMap(cv, { outW, outH, srcW, srcH, centerSrc });
+      // the 2D compositor draws the whole source into `rect` (destination size outW×outH)
+      const expectX = (cv[0] * outW - rect.x) / rect.w;
+      const expectY = (cv[1] * outH - rect.y) / rect.h;
+      const d = Math.max(Math.abs(uvx - expectX), Math.abs(uvy - expectY));
+      if (d > worst) { worst = d; worstCase = `${srcW}x${srcH}->${outW}x${outH} cv=${cv} got ${uvx.toFixed(4)},${uvy.toFixed(4)} want ${expectX.toFixed(4)},${expectY.toFixed(4)}`; }
+    }
+  }
+  ok(worst < 1e-9, 'GL mapping == 2D compositor mapping for every corner and size (same crop, no shift)',
+    worst < 1e-9 ? '' : `worst ${worst.toExponential(2)} — ${worstCase}`);
+
+  // ---- the orientation contract, stated directly ----
+  const c = coverRect(4000, 3000, 1080, 1920, { focus: [0.5, 0.5] });
+  const centerSrc = [(-c.x + 1080 / 2) * 4000 / c.w, (-c.y + 1920 / 2) * 3000 / c.h];
+  const P = (cv) => glMap(cv, { outW: 1080, outH: 1920, srcW: 4000, srcH: 3000, centerSrc });
+  const tl = P([0, 0]), tr = P([1, 0]), bl = P([0, 1]), br = P([1, 1]);
+  ok(tl[1] < bl[1], 'screen top samples the top of the image, screen bottom the bottom', `${tl[1].toFixed(3)} < ${bl[1].toFixed(3)}`);
+  ok(tl[0] < tr[0], 'screen left samples the left of the image — the x axis is not mirrored', `${tl[0].toFixed(3)} < ${tr[0].toFixed(3)}`);
+  ok(tl[1] < 0.01 && br[1] > 0.99, 'the frame spans the whole photo top-to-bottom (a 4:3 photo covers 9:16)', `${tl[1].toFixed(3)} … ${br[1].toFixed(3)}`);
+  ok(Math.abs(c.y) < 1e-6 && br[0] - tl[0] < 0.6 && br[0] - tl[0] > 0.2,
+    'the sides are cropped, never letterboxed, in cover mode', `x span ${(br[0] - tl[0]).toFixed(3)}`);
+
+  // ---- what the phone-side probe will report ----
+  const red = [255, 0, 0], green = [0, 255, 0], blue = [0, 0, 255], white = [255, 255, 255];
+  const upright = { topLeft: red, topRight: green, bottomLeft: blue, bottomRight: white };
+  const upsideDown = { topLeft: white, topRight: blue, bottomLeft: green, bottomRight: red };
+  const mirrored = { topLeft: green, topRight: red, bottomLeft: white, bottomRight: blue };
+  const cls = (await import('../src/core/diag.js')).classifyQuadrants;
+  ok(cls(upright).ok === true && cls(upright).verdict === 'درست', 'an upright render is classified as correct');
+  const flipped = cls(upsideDown);
+  ok(flipped.ok === false && flipped.rotated180 === true, 'a 180° render is detected', JSON.stringify(flipped.verdict));
+  ok(cls(mirrored).mirroredX === true, 'a horizontally mirrored render is detected');
+  ok(cls({ topLeft: [0, 0, 0], topRight: [0, 0, 0], bottomLeft: [0, 0, 0], bottomRight: [0, 0, 0] }).blank === true, 'a blank read-back is reported');
+  ok(cls({}).ok === false, 'missing corners do not pass');
+  ok(cls(upright, '2d').mode === '2d', 'the mode is reported');
+}
+
+/* ================================================================== */
+section('music: device speed → adaptive plan');
+
+{
+  ok(typeof Mod.measureOfflineSpeed === 'function', 'the speed probe exists');
+  const noAudio = await Mod.measureOfflineSpeed({ win: {} });
+  ok(noAudio.ok === false && noAudio.reason === 'no-offline-audio', 'no OfflineAudioContext is reported');
+
+  const t = { ms: 0 };
+  class FakeOAC {
+    constructor(ch, len, rate) { this.length = len; this.sampleRate = rate; }
+    createOscillator() { return { connect: () => ({ connect: () => ({}) }), start() {} }; }
+    createGain() { return { gain: { value: 0 }, connect: (x) => x }; }
+    async startRendering() { t.ms += 300; return { sampleRate: this.sampleRate, getChannelData: () => new Float32Array(this.length) }; }
+  }
+  const fast = await Mod.measureOfflineSpeed({ win: { OfflineAudioContext: FakeOAC }, now: () => t.ms });
+  ok(fast.ok === true && fast.ratio > 0, 'render speed is measured', JSON.stringify(fast));
+  ok(Mod.chooseMusicPlan({ ratio: 100 }).quality === 'full', 'a fast device gets the full plan');
+  ok(Mod.chooseMusicPlan({ ratio: 100 }).sampleRate === 44100, 'a fast device renders at 44.1 kHz');
+  const mid = Mod.chooseMusicPlan({ ratio: 8, wantedSeconds: 60 });
+  ok(mid.sampleRate === 32000 && mid.seconds <= 36, 'a mid device gets 32 kHz and a shorter arrangement', JSON.stringify(mid));
+  const slow = Mod.chooseMusicPlan({ ratio: 2, wantedSeconds: 60 });
+  ok(slow.sampleRate === 32000 && slow.seconds <= 24, 'a slow device gets the light plan', JSON.stringify(slow));
+  ok(JSON.stringify(Mod.chooseMusicPlan({ ratio: 0 })) === JSON.stringify(Mod.chooseMusicPlan({ ratio: 20 })),
+    'an unmeasurable ratio falls back to the default plan instead of dividing by zero');
+  ok(Mod.chooseMusicPlan({ ratio: NaN, wantedSeconds: 10 }).seconds >= 12, 'the arrangement never gets shorter than 12 s');
+  ok(Mod.chooseMusicPlan({ ratio: 100, wantedSeconds: 999 }).seconds <= 60, 'the arrangement is capped at 60 s');
+
+  // the generator honours the chosen sample rate (uses the file's real WebAudio fake)
+  const seen = [];
+  class RecordingOAC extends globalThis.OfflineAudioContext {
+    constructor(ch, len, rate) { super(ch, len, rate); seen.push([ch, len, rate]); }
+  }
+  const prevOAC = globalThis.OfflineAudioContext;
+  let generated = null;
+  try {
+    globalThis.OfflineAudioContext = RecordingOAC;
+    generated = await Mod.generateTrack({ genreId: 'lofi', seed: 3, seconds: 20, sampleRate: 32000, timeoutMs: 8000 });
+  } catch (e) {
+    ok(false, 'generateTrack with a custom sample rate must not throw', e.message);
+  } finally {
+    globalThis.OfflineAudioContext = prevOAC;
+  }
+  if (generated) {
+    ok(seen[0][2] === 32000, 'the OfflineAudioContext was created at the requested rate', JSON.stringify(seen[0]));
+    ok(Math.abs(seen[0][1] / 32000 - generated.duration) < 0.2, 'the context length matches the arrangement duration');
+    ok(generated.buffer.sampleRate === 32000, 'the returned buffer keeps that rate');
+    ok(generated.beats.length > 4 && generated.energy.length > 0, 'the analysis of a 32 kHz track is intact');
+  }
+}
+
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} feature checks passed`);
 process.exit(failures ? 1 : 0);

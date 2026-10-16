@@ -1,7 +1,8 @@
 /** Royalty-free music library: generated on the device, sampled live, then used. */
 import { state, savePrefs } from '../state.js';
 import { el, faNum, fmtTime, clamp, sleep, vibrate } from '../core/util.js';
-import { GENRES, generateTrack } from '../core/musicgen.js';
+import { GENRES, generateTrack, measureOfflineSpeed, chooseMusicPlan } from '../core/musicgen.js';
+import { recordMusicBuild } from '../core/diag.js';
 import { markDirty } from '../project.js';
 import { openSheet, closeSheet, btn, toast, slider, chips } from './shell.js';
 
@@ -113,6 +114,15 @@ export function openLibrarySheet({ onPick, duration = 30, startAt = 0 } = {}) {
     }, 1000);
   }
 
+  /** Measures offline-render speed once per session — weak devices get a lighter plan. */
+  async function devicePlan(wanted) {
+    if (!state.musicSpeed) {
+      status.textContent = 'سنجش سرعت ساخت موسیقی روی این گوشی…';
+      state.musicSpeed = await measureOfflineSpeed();
+    }
+    return { speed: state.musicSpeed, plan: chooseMusicPlan({ ratio: state.musicSpeed?.ratio || 20, wantedSeconds: wanted }) };
+  }
+
   async function buildPreview() {
     stop();
     useBtn.disabled = true;
@@ -125,19 +135,27 @@ export function openLibrarySheet({ onPick, duration = 30, startAt = 0 } = {}) {
     let phase = 'ساخت پیش‌نمایش';
     try {
       const genre = GENRES.find((g) => g.id === selected);
+      const { speed, plan } = await devicePlan(clamp(duration + 10, 20, 60) * tempo);
+      const speedNote = speed?.ok && speed.ratio < 12 ? ' — این گوشی کند است، نسخهٔ سبک‌تر می‌سازم' : '';
       markElapsed(t0, 'در حال ساخت');
+      if (speedNote) status.textContent = `در حال ساخت…${speedNote}`;
       track = await generateTrack({
         genreId: selected,
         bpm: Math.round(genre.bpm * tempo),
         seed,
-        // Only render the music we actually need: the old 75-150 s render was the
-        // main reason this felt stuck (2-4× more audio than the reel uses).
-        seconds: clamp(duration + 10, 20, 60) * tempo,
+        // Only render the music we actually need (the old 75-150 s render was the
+        // main reason this felt stuck) and pick a sample rate the device can afford.
+        seconds: plan.seconds,
+        sampleRate: plan.sampleRate,
         signal: controller.signal,
         onProgress: (p, label) => {
           phase = label;
-          status.textContent = `${label} — ${faNum(Math.round(p * 100))}٪`;
+          status.textContent = `${label} — ${faNum(Math.round(p * 100))}٪${speedNote}`;
         },
+      });
+      recordMusicBuild({
+        genre: selected, wanted: plan.seconds, ms: performance.now() - t0,
+        speed: speed?.ratio, plan: `${plan.seconds}s @${plan.sampleRate}Hz (${plan.quality})`, ok: true,
       });
       // if the app only needs `duration` seconds, keep the best window
       if (track.duration > duration + 4) {
@@ -153,6 +171,10 @@ export function openLibrarySheet({ onPick, duration = 30, startAt = 0 } = {}) {
     } catch (e) {
       console.error(e);
       const aborted = e?.name === 'AbortError' || /لغو/.test(e?.message || '');
+      recordMusicBuild({
+        genre: selected, ms: performance.now() - t0, speed: state.musicSpeed?.ratio,
+        phase, ok: false, error: aborted ? 'لغو شد' : (e?.message || String(e)),
+      });
       status.textContent = aborted
         ? 'ساخت لغو شد — می‌توانی دوباره بزنی'
         : `ساخت ناموفق بود (${phase}): ${e.message}`;
