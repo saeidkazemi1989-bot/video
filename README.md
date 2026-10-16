@@ -46,6 +46,20 @@ npm run dev          # http://<IP سیستم>:5173
 
 ---
 
+## ⬇️ دانلود APK آماده (بدون نصب هیچ ابزاری)
+
+آخرین بیلد اندروید روی GitHub Actions ساخته می‌شود و لینک‌هایش در **[DOWNLOAD.md](DOWNLOAD.md)** است:
+
+- لینک مستقیم ریلیز (نیاز به ورود به گیت‌هاب دارد، چون مخزن خصوصی است)
+- شاخهٔ `apk-build` — همیشه آخرین APK با نام `reelforge-latest.apk`
+
+```bash
+git fetch origin apk-build && git cat-file blob FETCH_HEAD:reelforge-latest.apk > reelforge.apk
+node tools/serve-apk.mjs .        # سرو کردن APK روی شبکهٔ محلی برای نصب روی گوشی
+```
+
+با هر تگ نسخه (`git tag v1.1.1 && git push origin v1.1.1`) یک Release با APK ساخته می‌شود.
+
 ## 📱 ساخت اپ اندروید
 
 نیاز: Android Studio (یا فقط JDK 21 + Android SDK).

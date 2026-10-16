@@ -11,7 +11,8 @@
  * lands in Git) — pass any folder that holds *.apk files.
  */
 import { createServer } from 'node:http';
-import { stat, readdir, createReadStream } from 'node:fs/promises';
+import { stat, readdir } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import { join, basename, resolve, extname } from 'node:path';
 
 const dir = resolve(process.argv[2] || new URL('../../downloads', import.meta.url).pathname);
