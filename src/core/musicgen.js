@@ -395,14 +395,78 @@ function composeProgression(genre, rng) {
 }
 
 /**
+ * Renders an OfflineAudioContext while reporting honest progress.
+ *
+ * `OfflineAudioContext.suspend(t)` resolves when the render reaches `t`, which is
+ * the only real progress signal the API offers. Engines that do not implement it
+ * (or throw) fall back to the caller's timer, and the render is always raced
+ * against a timeout so the UI can say "this is taking too long" instead of
+ * sitting at 90% forever.
+ */
+export async function renderWithProgress(ctx, { duration, onProgress, signal, timeoutMs = 120_000, fallbackTimer = null, steps = 8 } = {}) {
+  const total = Math.max(0.01, duration || ctx.length / ctx.sampleRate);
+  const timer = fallbackTimer || null;
+
+  const stopTimer = () => clearInterval(timer);
+
+  // Reports honest progress from the render itself. Engines without suspend()
+  // leave the caller's timer in charge; the render must never be blocked by it.
+  const drive = (async () => {
+    for (let i = 1; i < steps; i++) {
+      const at = (total * i) / steps;
+      let suspended = false;
+      try {
+        await ctx.suspend(at);
+        suspended = true;
+      } catch {
+        return false;
+      }
+      if (!suspended) return false;
+      stopTimer();
+      onProgress?.(0.12 + (0.8 * i) / steps, `رندر موسیقی روی گوشی… ${Math.round((i / steps) * 100)}٪`);
+      try { await ctx.resume(); } catch { /* ignore */ }
+      if (signal?.aborted) return false;
+    }
+    return true;
+  })().catch(() => false);
+
+  const rendering = Promise.resolve(ctx.startRendering());
+  const timeout = new Promise((_, reject) => {
+    const t = setTimeout(() => reject(new Error(`رندر موسیقی بیش از ${Math.round(timeoutMs / 1000)} ثانیه طول کشید`)), timeoutMs);
+    rendering.finally(() => clearTimeout(t)).catch(() => {});
+  });
+  const aborted = new Promise((_, reject) => {
+    if (!signal) return;
+    const onAbort = () => reject(new DOMException('لغو شد', 'AbortError'));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener?.('abort', onAbort, { once: true });
+  });
+
+  try {
+    return await Promise.race([rendering, timeout, aborted]);
+  } finally {
+    stopTimer();
+    void drive;
+  }
+}
+
+/**
  * Generate a track.
  * @returns {Promise<{buffer: AudioBuffer, bpm:number, beats:Float32Array, energy:Float32Array, energyHz:number, bestStart:number, dropTime:number, waveform:Float32Array, duration:number}>}
  */
-export async function generateTrack({ genreId = 'pop', bpm: bpmOverride = null, seed = 1, onProgress, signal } = {}) {
+export async function generateTrack({
+  genreId = 'pop',
+  bpm: bpmOverride = null,
+  seed = 1,
+  onProgress,
+  signal,
+  seconds = 0,            // how much music we actually need (0 = genre default)
+  timeoutMs = 120_000,    // a phone render that outlives this is reported, not awaited forever
+} = {}) {
   const genre = getGenre(genreId);
   const bpm = clamp(bpmOverride || genre.bpm, 60, 175);
   const rng = mulberry32(seed * 7919 + 13);
-  const arrangement = buildArrangement(bpm);
+  const arrangement = buildArrangement(bpm, seconds ? clamp(seconds, 12, 96) : 96);
   const { sections, totalBars, barSec, duration } = arrangement;
   const ctx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, Math.ceil(duration * 44100) + 4410, 44100);
   const kit = createKit(ctx, { bpm, reverb: genre.reverb }, ctx.destination, rng);
@@ -540,9 +604,16 @@ export async function generateTrack({ genreId = 'pop', bpm: bpmOverride = null, 
     src.start(0);
   }
 
-  const rendered = await ctx.startRendering();
+  onProgress?.(0.12, `رندر موسیقی روی گوشی (${Math.round(duration)} ثانیه)…`);
+  const rendered = await renderWithProgress(ctx, {
+    duration,
+    onProgress,
+    signal,
+    timeoutMs,
+    fallbackTimer: fakeTimer,
+  });
   if (fakeTimer) clearInterval(fakeTimer);
-  onProgress?.(0.92, 'نرمال‌سازی و اندازه‌گیری ریتم');
+  onProgress?.(0.93, 'نرمال‌سازی و اندازه‌گیری ریتم');
   if (signal?.aborted) throw new DOMException('لغو شد', 'AbortError');
 
   // normalize + measure

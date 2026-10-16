@@ -25,7 +25,8 @@ export const DEFAULT_SETTINGS = {
   captions: true,
   hook: true,
   outro: true,
-  orderMode: 'smart',   // 'smart' | 'intake'
+  orderMode: 'intake',  // 'intake' (همان ترتیبی که اضافه کردی) | 'smart' (مرتب‌سازی هوشمند)
+  framing: 'fit',       // 'fit' = همهٔ عکس دیده شود | 'fill' = قاب پر شود
   musicGain: 1,
   sourceGain: 0.35,
   musicStart: null,

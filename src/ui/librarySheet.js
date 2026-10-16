@@ -31,6 +31,10 @@ export function openLibrarySheet({ onPick, duration = 30, startAt = 0 } = {}) {
   const structureLine = el('div', { class: 'muted' });
   const waveCanvas = el('canvas', { style: { width: '100%', height: '52px', borderRadius: '10px', background: 'rgba(255,255,255,.04)' } });
   const playBtn = btn('▶ پیش‌نمایش', { small: true, onClick: () => (playing ? stop() : play()) });
+  const buildBtn = btn('⚙️ ساخت پیش‌نمایش', {
+    small: true,
+    onClick: () => { if (buildAbort) stop(); else buildPreview(); },
+  });
   const useBtn = btn('✅ استفاده از این آهنگ', {
     primary: true, block: true, disabled: true,
     onClick: async () => {
@@ -96,20 +100,44 @@ export function openLibrarySheet({ onPick, duration = 30, startAt = 0 } = {}) {
     }
   }
 
+  // «توقف» must interrupt the render too — otherwise the button is a lie.
+  let buildAbort = null;
+  let elapsedTimer = null;
+
+  function markElapsed(t0, prefix) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = setInterval(() => {
+      const secs = Math.round((performance.now() - t0) / 1000);
+      if (secs < 4) return;
+      status.textContent = `${prefix} — ${faNum(secs)} ثانیه گذشته؛ رندر موسیقی روی گوشی سنگین است، ${secs > 25 ? 'کمی دیگر صبر کن' : 'منتظر بمان'}…`;
+    }, 1000);
+  }
+
   async function buildPreview() {
     stop();
     useBtn.disabled = true;
+    buildBtn.textContent = '⏹ توقف ساخت';
     status.textContent = 'در حال ساخت پیش‌نمایش…';
     structureLine.textContent = '';
     const t0 = performance.now();
+    const controller = new AbortController();
+    buildAbort = controller;
+    let phase = 'ساخت پیش‌نمایش';
     try {
       const genre = GENRES.find((g) => g.id === selected);
-      const fullDuration = clamp(Math.max(duration * 2.2, 75), 60, 150) * tempo;
+      markElapsed(t0, 'در حال ساخت');
       track = await generateTrack({
         genreId: selected,
         bpm: Math.round(genre.bpm * tempo),
         seed,
-        onProgress: (p, label) => { status.textContent = `${label}… ${faNum(Math.round(p * 100))}٪`; },
+        // Only render the music we actually need: the old 75-150 s render was the
+        // main reason this felt stuck (2-4× more audio than the reel uses).
+        seconds: clamp(duration + 10, 20, 60) * tempo,
+        signal: controller.signal,
+        onProgress: (p, label) => {
+          phase = label;
+          status.textContent = `${label} — ${faNum(Math.round(p * 100))}٪`;
+        },
       });
       // if the app only needs `duration` seconds, keep the best window
       if (track.duration > duration + 4) {
@@ -124,7 +152,15 @@ export function openLibrarySheet({ onPick, duration = 30, startAt = 0 } = {}) {
       useBtn.disabled = false;
     } catch (e) {
       console.error(e);
-      status.textContent = `ساخت ناموفق بود: ${e.message}`;
+      const aborted = e?.name === 'AbortError' || /لغو/.test(e?.message || '');
+      status.textContent = aborted
+        ? 'ساخت لغو شد — می‌توانی دوباره بزنی'
+        : `ساخت ناموفق بود (${phase}): ${e.message}`;
+    } finally {
+      clearInterval(elapsedTimer);
+      buildAbort = null;
+      buildBtn.textContent = '⚙️ ساخت پیش‌نمایش';
+      useBtn.disabled = !track;
     }
   }
 
@@ -172,14 +208,23 @@ export function openLibrarySheet({ onPick, duration = 30, startAt = 0 } = {}) {
   }
 
   function stop() {
+    const wasBuilding = !!buildAbort;
+    buildAbort?.abort();
     playing = false;
     playBtn.textContent = '▶ پیش‌نمایش';
     try { previewStop?.(); } catch { /* noop */ }
     previewStop = null;
     try { previewCtx?.close(); } catch { /* noop */ }
     previewCtx = null;
+    if (wasBuilding) {
+      clearInterval(elapsedTimer);
+      buildBtn.textContent = '⚙️ ساخت پیش‌نمایش';
+    }
     drawWave();
   }
+
+  // build one right away so the sheet is never empty
+  setTimeout(() => { if (!track && !buildAbort) buildPreview(); }, 60);
 
   const close = openSheet(({ close: closeFn }) => el('div', { class: 'stack' }, [
     el('p', { class: 'lead', text: 'آهنگ خودم را می‌سازم — بدون کپی‌رایت و کاملاً روی همین گوشی. چون آهنگ را خودِ اپ می‌سازد، برش‌ها صد‌درصد روی ضرب می‌افتند.' }),
@@ -190,7 +235,7 @@ export function openLibrarySheet({ onPick, duration = 30, startAt = 0 } = {}) {
     ]),
     speedSlider,
     waveCanvas,
-    el('div', { class: 'row' }, [playBtn, el('span', { class: 'muted', text: 'پیش‌نمایش از بهترین بخش آهنگ' })]),
+    el('div', { class: 'row' }, [playBtn, buildBtn, el('span', { class: 'muted', text: 'پیش‌نمایش از بهترین بخش' })]),
     status,
     structureLine,
     useBtn,

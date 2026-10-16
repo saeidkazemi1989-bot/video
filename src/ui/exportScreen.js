@@ -10,10 +10,11 @@ import {
 import { disposePreview } from './previewScreen.js';
 import { openSubtitleSheet } from './subtitleScreen.js';
 import { webCodecsSupported } from '../core/encode.js';
+import { saveWithReport, shareSavedFile, isNativeApp, SAVE_DISPLAY } from '../core/save.js';
 import { openDiagSheet } from './diagSheet.js';
 
 /** Export the edit decision list so a project can be re-opened elsewhere. */
-function downloadPlanJson(plan) {
+async function downloadPlanJson(plan) {
   const data = {
     app: 'ReelForge',
     version: plan.version,
@@ -30,8 +31,8 @@ function downloadPlanJson(plan) {
     subtitles: plan.subtitles,
     copy: plan.copy,
   };
-  downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), 'reelforge-project.json');
-  toast('فایل پروژه ذخیره شد', 'ok');
+  const res = await saveWithReport(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), 'reelforge-project.json');
+  toast(res.message, res.ok ? 'ok' : 'err', 4000);
 }
 
 let exporting = false;
@@ -82,6 +83,11 @@ export function renderExportScreen(root, { rerender } = {}) {
 
   /* ---------------- result ---------------- */
   if (state.output?.url) {
+    const savedLine = el('div', { class: 'muted', text: state.output.savedPath
+      ? `✅ ذخیره شد: ${state.output.savedPath}`
+      : (isNativeApp()
+        ? `محل ذخیره: پوشهٔ ${SAVE_DISPLAY} — در برنامهٔ «فایل‌ها ▸ Documents» پیدا می‌شود`
+        : 'محل ذخیره: پوشهٔ دانلود مرورگر (یا هر جایی که برای دانلود انتخاب کنی)') });
     const vid = el('video', {
       src: state.output.url, controls: true, playsInline: true, loop: true,
       style: { width: '100%', borderRadius: '14px', background: '#000' },
@@ -93,27 +99,54 @@ export function renderExportScreen(root, { rerender } = {}) {
       ]),
       vid,
       el('div', { class: 'stack' }, [
-        btn('📥 ذخیره در گالری / دانلود MP4', {
+        btn('📥 ذخیرهٔ ویدیو روی گوشی', {
           primary: true, block: true,
-          onClick: () => { downloadBlob(state.output.video, state.output.filename); toast('در پوشه دانلود ذخیره شد', 'ok'); },
+          onClick: async () => {
+            try {
+              startBusy('ذخیرهٔ فایل…', 'نوشتن روی حافظهٔ گوشی', {});
+              const res = await saveWithReport(state.output.video, state.output.filename, {
+                onProgress: (p, label) => updateBusy(p, label),
+              });
+              stopBusy();
+              state.output.savedPath = res.ok ? `${res.display || ''}/${state.output.filename}`.replace(/^\//, '') : '';
+              state.output.savedUri = res.uri || null;
+              toast(res.message, res.ok ? 'ok' : 'err', res.ok ? 3200 : 5200);
+              rerenderAll();
+            } catch (e) {
+              stopBusy();
+              toast(`ذخیره نشد: ${e.message}`, 'err', 5000);
+            }
+          },
         }),
-        btn('📤 اشتراک‌گذاری (اینستاگرام، واتساپ…)', {
+        el('div', { class: 'muted', text: 'اگر فایل را در گالری می‌خواهی، بعد از ذخیره دکمهٔ «اشتراک‌گذاری» را بزن و «ذخیره در گالری/Photos» را انتخاب کن.' }),
+        savedLine,
+        btn('📤 اشتراک‌گذاری (گالری، اینستاگرام، واتساپ…)', {
           block: true,
           onClick: async () => {
-            const res = await shareFile(state.output.video, state.output.filename, plan.copy.hook);
-            if (res === 'downloaded') toast('اشتراک‌گذاری پشتیبانی نشد؛ فایل دانلود شد', 'info');
+            const res = await shareSavedFile({
+              uri: state.output.savedUri,
+              blob: state.output.savedUri ? null : state.output.video,
+              filename: state.output.filename,
+              text: plan.copy.hook,
+            });
+            if (res === 'unsupported') toast('اشتراک‌گذاری روی این دستگاه در دسترس نیست؛ فایل را ذخیره کن', 'info', 4200);
+            else if (res === 'cancelled') toast('اشتراک‌گذاری لغو شد', 'info');
           },
         }),
         el('div', { class: 'row' }, [
           btn('📋 کپی کپشن', { small: true, onClick: async () => { await copyText(plan.copy.caption); toast('کپشن کپی شد', 'ok'); } }),
           btn('📝 کپی هشتگ‌ها', { small: true, onClick: async () => { await copyText(plan.copy.tags.join(' ')); toast('هشتگ‌ها کپی شد', 'ok'); } }),
-          state.output.wav ? btn('🎧 دانلود صدای نهایی (WAV)', { small: true, onClick: () => downloadBlob(state.output.wav, state.output.filename.replace('.mp4', '.wav')) }) : null,
+          state.output.wav ? btn('🎧 ذخیرهٔ صدای نهایی (WAV)', { small: true, onClick: async () => {
+            const res = await saveWithReport(state.output.wav, state.output.filename.replace('.mp4', '.wav'));
+            toast(res.message, res.ok ? 'ok' : 'err', 4000);
+          } }) : null,
         ]),
         btn('🖼️ ذخیره کپشن در فایل متنی', {
           small: true, ghost: true,
-          onClick: () => {
+          onClick: async () => {
             const text = `هوک: ${plan.copy.hook}\n\n${plan.copy.body.join('\n')}\n\n${plan.copy.cta}\n\n${plan.copy.tags.join(' ')}\n`;
-            downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), state.output.filename.replace('.mp4', '.txt'));
+            const res = await saveWithReport(new Blob([text], { type: 'text/plain;charset=utf-8' }), state.output.filename.replace('.mp4', '.txt'));
+            toast(res.message, res.ok ? 'ok' : 'err', 4000);
           },
         }),
       ]),

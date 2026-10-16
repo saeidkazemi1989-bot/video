@@ -3,15 +3,19 @@
  * music generator and the speech detector run exactly as they do on a phone.
  *   node tools/test-features.mjs
  */
+import { readFileSync } from 'node:fs';
 import { detectFocus, focusAtTime, trackTravel, smoothTrack, downscale, skinMask, components } from '../src/core/face.js';
 import { detectSpeechSegments, buildSubtitles, estimateWpm } from '../src/core/vad.js';
 import { GENRES, generateTrack, buildArrangement } from '../src/core/musicgen.js';
+import * as Mod from '../src/core/musicgen.js';
 import * as Edit from '../src/core/editPlan.js';
 import { buildPlan, DEFAULT_SETTINGS } from '../src/core/planner.js';
 import { attachSubtitles } from '../src/core/overlays.js';
 import { drawSubtitles, SUBTITLE_STYLES } from '../src/core/text.js';
 import * as Upd from '../src/core/update.js';
 import * as Diag from '../src/core/diag.js';
+import { coverRect, containRect, pillowBars, FRAMINGS } from '../src/core/framing.js';
+import * as Save from '../src/core/save.js';
 
 let failures = 0, checks = 0;
 function ok(cond, label, extra = '') {
@@ -741,6 +745,211 @@ section('device diagnostics («وضعیت دستگاه»)');
   ok(Diag.reportRows(goodReport).some(([k, v]) => k.includes('کدگذار') && String(v).includes('فعال')), 'healthy encoder row');
   ok(Diag.reportText({}).length > 0, 'an empty report still renders without throwing');
   ok(Diag.reportRows({}).length >= 1, 'reportRows never returns nothing');
+}
+
+
+/* ================================================================== */
+section('framing («کامل» vs «پرکردن قاب»)');
+
+{
+  // a 4:3 photo in a 9:16 reel frame — the case that made the app look "zoomed"
+  const srcW = 4000, srcH = 3000, outW = 1080, outH = 1920;
+  const fit = containRect(srcW, srcH, outW, outH);
+  ok(Math.abs(fit.w / fit.h - srcW / srcH) < 1e-6, 'contain keeps the source aspect');
+  ok(fit.w <= outW + 1e-6 && fit.h <= outH + 1e-6, 'contain shows the whole picture inside the frame');
+  ok(fit.x >= -1e-6 && fit.y >= -1e-6 && fit.x + fit.w <= outW + 1e-6 && fit.y + fit.h <= outH + 1e-6, 'contain is centred, nothing outside');
+  ok(Math.abs(fit.w - outW) < 1e-6, 'a 4:3 photo uses the full width');
+  ok(fit.h < outH * 0.6, 'and therefore leaves backdrop above/below', String(fit.h));
+
+  const cover = coverRect(srcW, srcH, outW, outH);
+  ok(cover.w >= outW - 1e-6 && cover.h >= outH - 1e-6, 'cover always fills the frame');
+  ok(Math.abs(cover.w / cover.h - srcW / srcH) < 1e-6, 'cover keeps the source aspect');
+  ok(cover.w > fit.w, 'cover is zoomed in compared with contain (the reported "zoom")');
+
+  // portrait photo: cover crops the sides, contain letterboxes the same amount
+  const pFit = containRect(3000, 4000, 1080, 1920);
+  ok(Math.abs(pFit.w - 1080) < 1e-6, 'a 3:4 portrait photo fits the width in contain');
+  ok(pFit.h < 1920 && pFit.h > 1000, 'and leaves backdrop above/below instead of cropping', String(pFit.h));
+  const tallFit = containRect(1080, 2400, 1080, 1920);
+  ok(Math.abs(tallFit.h - 1920) < 1e-6 && tallFit.w < 1080, 'a taller-than-9:16 source fits the height instead');
+  const pCover = coverRect(3000, 4000, 1080, 1920);
+  ok(pCover.w >= 1080 && pCover.h >= 1920, 'portrait cover still fills the frame');
+
+  // the bars function describes the backdrop area for the UI
+  const bars = pillowBars(srcW, srcH, outW, outH);
+  ok(bars.sides === 0 && bars.top > 0.3, 'pillow bars report top/bottom backdrop', JSON.stringify(bars));
+  ok(pillowBars(1080, 1920, 1080, 1920).top === 0, 'a 9:16 source needs no backdrop at all');
+
+  // smart reframe must still work in cover mode
+  const left = coverRect(4000, 3000, 1080, 1920, { focus: [0.1, 0.5] });
+  const right = coverRect(4000, 3000, 1080, 1920, { focus: [0.9, 0.5] });
+  // smaller x = the window shows the right-hand part of the photo
+  ok(right.x < left.x, 'focus moves the crop window', `${left.x} vs ${right.x}`);
+  ok(left.x > -1480 / 2, 'a subject on the left keeps the window in the left half', String(left.x));
+  ok(Math.abs(left.x - right.x) > 100, 'the two crop windows really differ', `${left.x} vs ${right.x}`);
+  for (const r of [left, right, coverRect(4000, 3000, 1080, 1920, { focus: [0, 0] }), coverRect(4000, 3000, 1080, 1920, { focus: [1, 1] })]) {
+    ok(r.x <= 1e-6 && r.y <= 1e-6 && r.x + r.w >= outW - 1e-6 && r.y + r.h >= outH - 1e-6,
+      'cover never leaves a gap at any focus', JSON.stringify(r));
+  }
+  ok(coverRect(4000, 3000, 1080, 1920, { zoom: 1.4 }).w > coverRect(4000, 3000, 1080, 1920).w, 'zoom scales the cover window');
+  ok(FRAMINGS.length === 2 && FRAMINGS[0].id === 'fit', 'two framing modes are offered, fit first');
+
+  // both compositors must agree: the shader mirrors containRect, the 2D fallback calls it
+  const glSource = readFileSync(new URL('../src/core/gl.js', import.meta.url), 'utf8');
+  ok(/vec2 vis = \(srcA > outA\)/.test(glSource), 'the shader computes the same contain mapping');
+  ok(glSource.includes("containRect(srcWidth, srcHeight, w, h)"), 'the 2D fallback uses containRect');
+  ok(glSource.includes("coverRect(srcWidth, srcHeight, w, h"), 'the 2D fallback uses coverRect');
+}
+
+/* ================================================================== */
+section('saving files where they can be found');
+
+{
+  const blob = new Blob([new Uint8Array(1024)], { type: 'video/mp4' });
+  const chunks = Save.sliceBlob(new Blob([new Uint8Array(7 * 1024 * 1024)]), 3 * 1024 * 1024);
+  ok(chunks.length === 3, 'big files are split into transfer chunks', String(chunks.length));
+  ok(chunks[0].size === 3 * 1024 * 1024 && chunks[2].size === 1024 * 1024, 'chunks keep the byte count exact',
+    chunks.map((c) => c.size).join('/'));
+  ok(Save.sliceBlob(new Blob([])).length === 0, 'an empty blob produces no chunks');
+  ok(Save.sliceBlob(null).length === 0, 'a missing blob is tolerated');
+
+  ok(Save.isNativeApp({ Capacitor: { isNativePlatform: () => true } }) === true, 'native platform detected');
+  ok(Save.isNativeApp({ Capacitor: { platform: 'android' } }) === true, 'a static platform string works too');
+  ok(Save.isNativeApp({}) === false, 'a plain browser is not native');
+  ok(Save.isNativeApp({ Capacitor: { isNativePlatform: () => { throw new Error('x'); } } }) === false, 'a throwing bridge is safe');
+
+  // native save: the Filesystem plugin gets the whole file, in order, with progress
+  const calls = [];
+  const fakeFS = {
+    Directory: { Documents: 'DOCUMENTS' },
+    async writeFile(o) { calls.push({ op: 'write', ...o }); return { uri: 'file:///storage/emulated/0/Documents/ReelForge/x.mp4' }; },
+    async appendFile(o) { calls.push({ op: 'append', ...o }); },
+    async getUri(o) { return { uri: `file:///doc/${o.path}` }; },
+  };
+  const progress = [];
+  const res = await Save.saveBlob(new Blob([new Uint8Array(6 * 1024 * 1024)]), 'reel.mp4', {
+    win: { Capacitor: { isNativePlatform: () => true } },
+    filesystem: fakeFS,
+    directory: 'DOCUMENTS',
+    chunkBytes: 2 * 1024 * 1024,
+    onProgress: (p, label) => progress.push([p, label]),
+  });
+  ok(res.ok === true && res.method === 'files', 'native save reports success', JSON.stringify(res));
+  ok(calls[0].op === 'write' && calls[0].path === 'ReelForge/reel.mp4', 'the file lands in the ReelForge folder', calls[0].path);
+  ok(calls[0].recursive === true, 'the folder is created on demand');
+  ok(calls.filter((c) => c.op === 'append').length === 2, 'the remaining chunks are appended', String(calls.length));
+  ok(res.uri.startsWith('file://'), 'a shareable uri comes back', res.uri);
+  ok(res.display === 'Documents/ReelForge', 'the display path is human readable', res.display);
+  ok(progress.length >= 3 && progress.at(-1)[0] <= 1, 'progress is reported per chunk', String(progress.length));
+  ok(progress.at(-1)[1].includes('ذخیره'), 'progress labels are Persian');
+
+  // a missing plugin must not pretend to have saved
+  const noPlugin = await Save.saveBlob(blob, 'x.mp4', { win: { Capacitor: { isNativePlatform: () => true } }, filesystem: {} });
+  ok(noPlugin.ok === false && noPlugin.error === 'filesystem-plugin-missing', 'no plugin → honest failure');
+
+  // a failing write is reported, not swallowed
+  const brokenFS = { Directory: { Documents: 'DOCUMENTS' }, writeFile: async () => { throw new Error('quota'); }, appendFile: async () => {} };
+  const failed = await Save.saveBlob(blob, 'x.mp4', { win: { Capacitor: { isNativePlatform: () => true } }, filesystem: brokenFS, directory: 'DOCUMENTS' });
+  ok(failed.ok === false && failed.error === 'quota', 'write errors surface to the UI', JSON.stringify(failed));
+
+  // browser path still downloads
+  const downloaded = [];
+  const webSaved = await Save.saveBlob(blob, 'x.mp4', {
+    win: {},
+    filesystem: { Directory: {}, writeFile: async () => { throw new Error('should not be called'); } },
+    download: (b, name) => downloaded.push([name, b.size]),
+  });
+  ok(webSaved.ok === true && webSaved.method === 'download', 'a browser falls back to a download', JSON.stringify(webSaved));
+  ok(downloaded.length === 1 && downloaded[0][0] === 'x.mp4' && downloaded[0][1] === 1024, 'the browser download gets the whole file', JSON.stringify(downloaded));
+  const failedDownload = await Save.saveBlob(blob, 'x.mp4', { win: {}, download: () => { throw new Error('blocked'); } });
+  ok(failedDownload.ok === false && failedDownload.error === 'blocked', 'a blocked download is reported', JSON.stringify(failedDownload));
+
+  const report = await Save.saveWithReport(blob, 'reel.mp4', {
+    win: { Capacitor: { isNativePlatform: () => true } }, filesystem: fakeFS, directory: 'DOCUMENTS', chunkBytes: 4 * 1024 * 1024,
+  });
+  ok(report.message.includes('Documents/ReelForge/reel.mp4'), 'the success message names the exact folder', report.message);
+  const failedReport = await Save.saveWithReport(blob, 'reel.mp4', { win: { Capacitor: { isNativePlatform: () => true } }, filesystem: {} });
+  ok(failedReport.message.includes('اشتراک'), 'a failure points at the sharing fallback', failedReport.message);
+
+  ok(Save.base64ToBytes('AAECAw==').length === 4, 'base64 decodes to bytes');
+  ok(Save.base64ToBytes('data:video/mp4;base64,AAECAw==').length === 4, 'data-url prefixes are stripped');
+  ok(Save.SAVE_DISPLAY.includes('Documents'), 'the advertised folder is Documents/ReelForge');
+}
+
+/* ================================================================== */
+section('music render progress (no more parking at 90%)');
+
+{
+  // a fake OfflineAudioContext that supports suspend/resume like a phone does
+  class FakeOffline {
+    constructor(len) { this.length = len; this.sampleRate = 44100; this._suspends = []; this._resume = null; }
+    suspend(t) {
+      return new Promise((resolve) => {
+        this._suspends.push({ t, resolve });
+        if (this._resume) { const r = this._resume; this._resume = null; r(); }
+      });
+    }
+    resume() {
+      const next = this._suspends.shift();
+      this._lastResume = true;
+      return next ? Promise.resolve(next.resolve()).then(() => {}) : Promise.resolve();
+    }
+    startRendering() {
+      const drive = async () => {
+        await new Promise((r) => setTimeout(r, 0));
+        while (this._suspends.length) {
+          const next = this._suspends[0];
+          if (this._resume) { const r = this._resume; this._resume = null; r(); }
+          await new Promise((r) => setTimeout(r, 0));
+          await next.resolve();
+          await new Promise((r) => setTimeout(r, 0));
+        }
+        return { sampleRate: 44100, length: this.length, getChannelData: () => new Float32Array(this.length) };
+      };
+      return drive();
+    }
+  }
+  const seen = [];
+  const ctx = new FakeOffline(44100 * 20);
+  const rendered = await Mod.renderWithProgress(ctx, {
+    duration: 20,
+    steps: 4,
+    onProgress: (p, label) => seen.push([p, label]),
+  });
+  ok(!!rendered && rendered.sampleRate === 44100, 'the render still resolves');
+  ok(seen.length >= 3, 'progress is reported from the render loop, not a timer', String(seen.length));
+  const values = seen.map(([p]) => p);
+  ok(values.every((v, i) => i === 0 || v >= values[i - 1]), 'progress never goes backwards', values.join(','));
+  ok(Math.max(...values) <= 0.95, 'progress stays honest before analysis', String(Math.max(...values)));
+  ok(values.at(-1) > 0.5, 'progress travels well past the old 12% ceiling', String(values.at(-1)));
+  ok(seen.every(([, label]) => label.includes('%') || label.includes('رندر')), 'labels describe the render');
+
+  // an engine without suspend() must still render (fallback timer keeps the bar alive)
+  const noSuspend = {
+    length: 44100, sampleRate: 44100,
+    suspend: () => { throw new Error('not supported'); },
+    resume: async () => {},
+    startRendering: async () => ({ sampleRate: 44100, length: 44100, getChannelData: () => new Float32Array(44100) }),
+  };
+  const still = await Mod.renderWithProgress(noSuspend, { duration: 1, onProgress: () => {} });
+  ok(!!still, 'a context without suspend() still renders');
+
+  // a render that never finishes must report instead of hanging the UI forever
+  const stuck = { length: 44100, sampleRate: 44100, suspend: async () => {}, resume: async () => {}, startRendering: () => new Promise(() => {}) };
+  let timeoutError = '';
+  try {
+    await Mod.renderWithProgress(stuck, { duration: 1, timeoutMs: 40, onProgress: () => {} });
+  } catch (e) { timeoutError = e.message; }
+  ok(timeoutError.includes('طول کشید'), 'a stuck render times out with a Persian message', timeoutError);
+
+  // cancellation propagates
+  const controller = new AbortController();
+  controller.abort();
+  let aborted = '';
+  try {
+    await Mod.renderWithProgress(new FakeOffline(44100 * 4), { duration: 2, steps: 3, signal: controller.signal, onProgress: () => {} });
+  } catch (e) { aborted = e.name; }
+  ok(aborted === 'AbortError', 'an aborted build stops early', aborted);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} feature checks passed`);

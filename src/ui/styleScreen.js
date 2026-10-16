@@ -67,9 +67,22 @@ export function renderStyleScreen(root, { rerender } = {}) {
     el('div', { class: 'field' }, [
       el('label', { text: 'ترتیب نماها' }),
       seg([
-        { id: 'smart', label: 'هوشمند (بهترین اول)' },
         { id: 'intake', label: 'همان ترتیب من' },
+        { id: 'smart', label: 'هوشمند (بهترین اول)' },
       ], state.settings.orderMode, (id) => { patchSettings({ orderMode: id }); rerender?.(); }),
+      el('div', { class: 'muted', text: state.settings.orderMode === 'intake'
+        ? 'نماها به همان ترتیبی که اضافه کردی می‌آیند.'
+        : 'اپ نماها را بر اساس کیفیت و تنوع مرتب می‌کند (ممکن است ترتیب عوض شود).' }),
+    ]),
+    el('div', { class: 'field' }, [
+      el('label', { text: 'قاب‌بندی عکس و ویدیو در کادر ۹:۱۶' }),
+      seg([
+        { id: 'fit', label: 'کامل (بدون برش)' },
+        { id: 'fill', label: 'پرکردن قاب' },
+      ], state.settings.framing, (id) => { patchSettings({ framing: id }); rerender?.(); }),
+      el('div', { class: 'muted', text: state.settings.framing === 'fill'
+        ? 'قاب کاملاً پر می‌شود؛ بخشی از لبه‌های عکس برش می‌خورد (نگاه حرفه‌ای‌تر).'
+        : 'همهٔ عکس دیده می‌شود و اطرافش با نسخهٔ محو خودِ عکس پر می‌شود.' }),
     ]),
     el('div', { class: 'field' }, [
       el('label', { text: 'فریم بر ثانیه' }),

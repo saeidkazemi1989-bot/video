@@ -3,6 +3,7 @@
  * selected preset and real transitions blended with the previous frame.
  */
 import { clamp } from './util.js';
+import { coverRect, containRect } from './framing.js';
 
 export const VERT_SRC = `#version 300 es
 in vec2 aPos;
@@ -47,6 +48,7 @@ uniform float uBloom;
 uniform float uScan;
 uniform float uHue;
 uniform float uLetterbox;
+uniform float uFraming;      // 0 = fill the frame (cover), 1 = show the whole frame (contain)
 uniform float uTime;
 
 uniform int   uTransType;  // 0 none 1 fade 2 flash 3 zoomblur 4 whip 5 glitch 6 slide 7 zoom 8 lightleak 9 spin
@@ -150,24 +152,45 @@ void main(){
   vec2 muv = mapUv(cv, inside);
   vec3 col = texture(uTex, clamp(muv, 0.0, 1.0)).rgb;
 
+  // ---- framing: contain puts the whole picture inside a blurred backdrop ----
+  float fx = 1.0;                       // punch-in effects only make sense when filled
+  if (uFraming > 0.5) {
+    float srcA = uSrcSize.x / max(1.0, uSrcSize.y);
+    float outA = uRes.x / max(1.0, uRes.y);
+    vec2 vis = (srcA > outA) ? vec2(1.0, outA / srcA) : vec2(srcA / outA, 1.0);
+    vec2 off = (1.0 - vis) * 0.5;
+    vec2 uvf = (uv - off) / vis;
+    bool inFit = uvf.x > 0.0 && uvf.x < 1.0 && uvf.y > 0.0 && uvf.y < 1.0;
+    // the backdrop reuses the cover sample, blurred with a cheap 5-tap disc
+    vec2 br = vec2(30.0) / max(uRes.x, uRes.y);
+    vec3 bg = texture(uTex, clamp(muv, 0.0, 1.0)).rgb * 0.36;
+    bg += texture(uTex, clamp(muv + vec2(br.x, 0.0), 0.0, 1.0)).rgb * 0.16;
+    bg += texture(uTex, clamp(muv - vec2(br.x, 0.0), 0.0, 1.0)).rgb * 0.16;
+    bg += texture(uTex, clamp(muv + vec2(0.0, br.y), 0.0, 1.0)).rgb * 0.16;
+    bg += texture(uTex, clamp(muv - vec2(0.0, br.y), 0.0, 1.0)).rgb * 0.16;
+    bg = mix(bg, vec3(dot(bg, vec3(0.2126, 0.7152, 0.0722))), 0.3) * 0.62;
+    col = inFit ? texture(uTex, clamp(uvf, 0.0, 1.0)).rgb : bg;
+    fx = 0.0;
+  }
+
   // sharper look through a light unsharp mask
-  if (uSharpen > 0.001) {
+  if (uSharpen > 0.001 * fx) {
     vec2 t = 1.6 / uSrcSize;
     vec3 blur = (
       texture(uTex, clamp(muv + vec2(t.x, 0.0), 0.0, 1.0)).rgb +
       texture(uTex, clamp(muv - vec2(t.x, 0.0), 0.0, 1.0)).rgb +
       texture(uTex, clamp(muv + vec2(0.0, t.y), 0.0, 1.0)).rgb +
       texture(uTex, clamp(muv - vec2(0.0, t.y), 0.0, 1.0)).rgb) * 0.25;
-    col += (col - blur) * uSharpen * 2.2;
+    col += (col - blur) * uSharpen * 2.2 * fx;
   }
   // chroma aberration
-  if (uChroma > 0.001) {
-    vec2 d = (muv - 0.5) * uChroma * 0.012;
+  if (uChroma > 0.001 * fx) {
+    vec2 d = (muv - 0.5) * uChroma * 0.012 * fx;
     col.r = texture(uTex, clamp(muv + d, 0.0, 1.0)).r;
     col.b = texture(uTex, clamp(muv - d, 0.0, 1.0)).b;
   }
   // soft bloom on highlights
-  if (uBloom > 0.001) {
+  if (uBloom > 0.001 * fx) {
     vec3 sum = vec3(0.0);
     vec2 r = vec2(5.0) / uSrcSize;
     sum += texture(uTex, clamp(muv + vec2(r.x, 0.0), 0.0, 1.0)).rgb;
@@ -178,7 +201,7 @@ void main(){
     sum += texture(uTex, clamp(muv - r * 0.7, 0.0, 1.0)).rgb;
     vec3 avg = sum / 6.0;
     float lum = dot(avg, vec3(0.2126, 0.7152, 0.0722));
-    col += avg * uBloom * smoothstep(0.55, 0.95, lum) * 0.9;
+    col += avg * uBloom * smoothstep(0.55, 0.95, lum) * 0.9 * fx;
   }
 
   col = grade(col, uv);
@@ -304,7 +327,7 @@ export function createGLRenderer(canvas) {
   const names = [
     'uRes', 'uSrcSize', 'uCoverScale', 'uCoverOffset', 'uZoom', 'uPan', 'uRot', 'uFocus',
     'uLift', 'uGain', 'uExposure', 'uContrast', 'uSat', 'uVibrance', 'uTemp', 'uTint', 'uGamma',
-    'uFade', 'uVignette', 'uGrain', 'uSharpen', 'uChroma', 'uBloom', 'uScan', 'uHue', 'uLetterbox',
+    'uFade', 'uVignette', 'uGrain', 'uSharpen', 'uChroma', 'uBloom', 'uScan', 'uHue', 'uLetterbox', 'uFraming',
     'uTime', 'uTransType', 'uTrans', 'uTransDir', 'uHasPrev', 'uTex', 'uPrev',
   ];
   for (const n of names) U[n] = gl.getUniformLocation(prog, n);
@@ -368,6 +391,7 @@ export function createGLRenderer(canvas) {
       transition = null,
       time = 0,
       letterbox = 0,
+      framing = 0,
     }) {
       const w = canvas.width, h = canvas.height;
       gl.viewport(0, 0, w, h);
@@ -411,6 +435,7 @@ export function createGLRenderer(canvas) {
       gl.uniform1f(U.uScan, grade.scanlines);
       gl.uniform1f(U.uHue, grade.hueShift || 0);
       gl.uniform1f(U.uLetterbox, letterbox);
+      gl.uniform1f(U.uFraming, framing ? 1 : 0);
       gl.uniform1f(U.uTime, time);
 
       const tr = transition?.type && transition.type !== 'cut' ? transition : null;
@@ -435,13 +460,19 @@ export function create2DRenderer(canvas) {
     resize(w, h) { canvas.width = w; canvas.height = h; },
     snapshotPrev() {},
     resetPrev() {},
-    draw({ source, srcWidth, srcHeight, grade, zoom = 1, pan = [0, 0], transition = null, time = 0, focus = [0.5, 0.42] }) {
+    draw({ source, srcWidth, srcHeight, grade, zoom = 1, pan = [0, 0], transition = null, time = 0, focus = [0.5, 0.42], framing = 0 }) {
       const w = canvas.width, h = canvas.height;
-      const scale = Math.max(w / srcWidth, h / srcHeight) * zoom;
-      const dw = srcWidth * scale, dh = srcHeight * scale;
-      const fx = clamp(focus[0], 0, 1), fy = clamp(focus[1], 0, 1);
-      const x = clamp((w - dw) / 2 + (0.5 - fx) * dw * 0.25 + pan[0], Math.min(0, w - dw), 0);
-      const y = clamp((h - dh) / 2 + (0.42 - fy) * dh * 0.25 + pan[1], Math.min(0, h - dh), 0);
+      const cover = coverRect(srcWidth, srcHeight, w, h, { zoom, focus, pan });
+      const { x, y, w: dw, h: dh } = cover;
+      if (framing) {
+        // blurred cover as the backdrop, then the whole picture inside it
+        const fit = containRect(srcWidth, srcHeight, w, h);
+        ctx.save();
+        ctx.filter = 'blur(26px) brightness(0.55) saturate(0.75)';
+        ctx.drawImage(source, x, y, dw, dh);
+        ctx.restore();
+        ctx.drawImage(source, fit.x, fit.y, fit.w, fit.h);
+      }
       ctx.save();
       ctx.filter = [
         `brightness(${grade.exposure})`,
@@ -450,7 +481,7 @@ export function create2DRenderer(canvas) {
         grade.saturation < 0.15 ? 'grayscale(1)' : '',
         `sepia(${Math.max(0, grade.temperature) * 0.35})`,
       ].filter(Boolean).join(' ');
-      ctx.drawImage(source, x, y, dw, dh);
+      if (!framing) ctx.drawImage(source, x, y, dw, dh);
       ctx.restore();
       if (transition?.type && transition.type !== 'cut') {
         ctx.fillStyle = transition.type === 'flash'

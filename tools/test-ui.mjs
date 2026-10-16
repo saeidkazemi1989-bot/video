@@ -439,6 +439,29 @@ console.log('\n▸ update button («بروزرسانی»)');
 }
 
 
+console.log('\n▸ framing + saving in the flow');
+{
+  state.assets = [];
+  for (let i = 0; i < 3; i++) state.assets.push(fakeAsset(i, i === 1 ? 'video' : 'photo'));
+  state.plan = null;
+  renderStep(2);
+  ok(screen.textContent.includes('قاب‌بندی'), 'step 2 offers the framing choice');
+  ok(screen.textContent.includes('کامل (بدون برش)'), 'the fit option is offered');
+  ok(screen.textContent.includes('پرکردن قاب'), 'the fill option is offered');
+  ok(screen.textContent.includes('همان ترتیب من'), 'the intake order is offered first');
+  const framingSeg = [...screen.querySelectorAll('.seg')].find((n) => n.textContent.includes('پرکردن قاب'));
+  ok(!!framingSeg, 'the framing control renders as a segmented control');
+  ok(screen.textContent.includes('همهٔ عکس دیده می‌شود'), 'the fit option is explained', screen.textContent.slice(0, 0));
+
+  state.output = { video: new Blob([new Uint8Array(1024)], { type: 'video/mp4' }), filename: 'reelforge-1.mp4', url: 'blob:x', wav: null };
+  renderStep(6);
+  ok(screen.textContent.includes('ذخیرهٔ ویدیو روی گوشی'), 'step 6 offers a real save');
+  ok(screen.textContent.includes('محل ذخیره'), 'the destination is stated');
+  ok(screen.textContent.includes('اشتراک‌گذاری'), 'sharing with the gallery/Instagram is offered');
+  ok(screen.textContent.includes('گالری'), 'the gallery route is explained');
+  state.output = null;
+}
+
 console.log('\n▸ device report sheet');
 {
   openDiagSheet();

@@ -264,6 +264,7 @@ export class TimelineRenderer {
       transition,
       time,
       letterbox: plan.preset.grade.letterbox || 0,
+      framing: plan.settings?.framing === 'fill' ? 0 : 1,   // default: show the whole picture
     });
 
     this.ctx.drawImage(this.glCanvas, 0, 0, this.W, this.H);
