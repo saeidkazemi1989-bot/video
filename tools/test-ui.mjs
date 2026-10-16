@@ -109,6 +109,8 @@ const { renderMusicScreen } = await import('../src/ui/musicScreen.js');
 const { renderPreviewScreen } = await import('../src/ui/previewScreen.js');
 const { renderExportScreen } = await import('../src/ui/exportScreen.js');
 const { openSettingsSheet } = await import('../src/ui/settingsSheet.js');
+const { renderEditorScreen } = await import('../src/ui/editorScreen.js');
+const { openSubtitleSheet } = await import('../src/ui/subtitleScreen.js');
 const { ensurePlan, planSummary } = await import('../src/project.js');
 
 let failures = 0;
@@ -249,10 +251,43 @@ console.log('\n▸ step 5 preview');
   ok(screen.textContent.includes('متن این ریلز'), 'copy preview present');
 }
 
+console.log('\n▸ manual editor (step 5.5)');
+{
+  state.step = 5.5;
+  const plan = ensurePlan();
+  renderEditorScreen(screen, { rerender: () => {} });
+  ok(screen.textContent.includes('نمای'), 'editor shows the shot inspector');
+  const segs = screen.querySelectorAll('.timeline__seg');
+  ok(segs.length === plan.cuts.length, 'every shot has a timeline segment', `${segs.length}/${plan.cuts.length}`);
+  ok(screen.textContent.includes('طول نما') || screen.textContent.includes('اختلاف'), 'length controls present');
+  const actions = [...screen.querySelectorAll('button')].map((b) => b.textContent).join(' ');
+  for (const label of ['دو نیم', 'تکرار', 'سرعت', 'ترنزیشن', 'حذف']) {
+    ok(actions.includes(label), `editor has the ${label} action`);
+  }
+  const before = plan.cuts.length;
+  const dup = [...screen.querySelectorAll('button')].find((b) => b.textContent.includes('تکرار'));
+  dup.dispatchEvent(new window.Event('click'));
+  ok(plan.cuts.length === before + 1, 'duplicate works from the UI', `${before} → ${plan.cuts.length}`);
+}
+
+console.log('\n▸ subtitle sheet');
+{
+  openSubtitleSheet({ onChange: () => {} });
+  const sheet = document.getElementById('sheet-host');
+  ok(sheet.hidden === false, 'subtitle sheet opens');
+  const text = sheet.textContent;
+  ok(text.includes('زیرنویس'), 'subtitle sheet mentions subtitles');
+  ok(text.includes('تحلیل گفتار'), 'offline speech detection offered');
+  ok(text.includes('هوش مصنوعی') || text.includes('استخراج متن'), 'AI transcription offered');
+  ok(sheet.querySelectorAll('.chip').length >= 4, 'subtitle styles listed', String(sheet.querySelectorAll('.chip').length));
+  sheet.hidden = true;
+}
+
 console.log('\n▸ step 6 export');
 {
   renderStep(6);
   ok(screen.textContent.includes('خروجی نهایی'), 'export screen renders');
+  ok([...screen.querySelectorAll('button')].some((b) => b.textContent.includes('پروژه')), 'project export button offered');
   ok(screen.textContent.includes('کیفیت خروجی'), 'quality picker present');
   const plan = ensurePlan();
   ok(screen.textContent.includes(plan.preset.name) || screen.textContent.includes('سبک'), 'plan info shown');

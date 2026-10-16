@@ -4,9 +4,11 @@
  */
 import { getPreset, sizeForAspect } from '../data/styles.js';
 import { clamp, mulberry32, shuffle } from './util.js';
-import { energyAt, nearestBeat } from './beats.js';
+import { energyAt, nearestBeat, energyAt as energyLevel, beatsInRange } from './beats.js';
 import { rankAssets } from './analyze.js';
 import { buildCopy } from './captions.js';
+import { resolveCutSource } from './cut.js';
+import { buildOverlays } from './overlays.js';
 
 export const DEFAULT_SETTINGS = {
   duration: 30,
@@ -27,6 +29,10 @@ export const DEFAULT_SETTINGS = {
   musicGain: 1,
   sourceGain: 0.35,
   musicStart: null,
+  smartReframe: true,
+  subtitles: false,
+  subtitleWords: 5,
+  subtitleStyle: 'plain',
 };
 
 function evenDistribute(total, parts, minEach, maxEach) {
@@ -188,40 +194,11 @@ export function buildPlan({
     const reuse = usedCount.get(asset.id) || 0;
     usedCount.set(asset.id, reuse + 1);
 
-    if (asset.kind === 'video') {
-      const srcIn = asset.trimIn || 0;
-      const srcOut = asset.trimOut ?? asset.duration ?? 0;
-      const avail = Math.max(0.15, srcOut - srcIn);
-      const need = cut.dur;
-      let start;
-      if (asset.userTrimmed) {
-        start = srcIn;
-      } else if (asset.analysis?.suggestedIn != null) {
-        start = asset.analysis.suggestedIn;
-      } else {
-        start = srcIn;
-      }
-      // different segment when the same clip is used again
-      if (reuse > 0) start += need * reuse;
-      let speed = 1;
-      if (avail >= need) {
-        start = clamp(start, srcIn, Math.max(srcIn, srcOut - need - 0.01));
-        cut.trimIn = +start.toFixed(4);
-        cut.trimOut = +(start + need).toFixed(4);
-      } else {
-        speed = clamp(avail / need, 0.3, 1);       // slow motion rather than a frozen frame
-        cut.trimIn = +srcIn.toFixed(4);
-        cut.trimOut = +srcOut.toFixed(4);
-      }
-      cut.speed = +speed.toFixed(4);
-      // a slowed-down clip would sound pitch-shifted, so its own audio is dropped
-      cut.planMute = S.sourceGain <= 0.001 || speed < 0.999;
-    } else {
-      cut.trimIn = 0;
-      cut.trimOut = null;
-      cut.speed = 1;
-      cut.planMute = true;
-    }
+    const resolved = resolveCutSource({ asset, dur: cut.dur, reuse, sourceGain: S.sourceGain });
+    cut.trimIn = resolved.trimIn;
+    cut.trimOut = resolved.trimOut;
+    cut.speed = resolved.speed;
+    cut.planMute = resolved.planMute;
 
     // motion language
     const autoMotion = asset.kind === 'photo'
@@ -277,46 +254,8 @@ export function buildPlan({
     seed: seed + 11,
   });
 
-  const overlays = [];
-  if (S.hook) {
-    overlays.push({
-      kind: 'hook',
-      text: copy.hook,
-      t0: 0,
-      t1: +Math.min(preset.intro.dur + 0.4, duration * 0.35).toFixed(3),
-      anim: preset.caption.anim,
-    });
-  }
-  if (S.captions && copy.lines.length) {
-    const interior = cuts.slice(1, Math.max(2, cuts.length - 1));
-    const step = Math.max(1, Math.floor(interior.length / copy.lines.length));
-    copy.lines.forEach((text, li) => {
-      const cut = interior[(li * step) % interior.length];
-      if (!cut) return;
-      const maxLen = Math.min(cut.dur * 0.85, 2.6);
-      overlays.push({
-        kind: 'line',
-        text,
-        t0: +(cut.t0 + Math.min(0.18, cut.dur * 0.12)).toFixed(3),
-        t1: +(cut.t0 + Math.max(0.9, maxLen)).toFixed(3),
-        anim: preset.caption.anim,
-      });
-    });
-  }
-  if (S.outro) {
-    const od = Math.min(preset.outro.dur, Math.max(1.2, duration * 0.18));
-    overlays.push({
-      kind: 'outro',
-      text: copy.cta,
-      handle: S.handle ? (S.handle.startsWith('@') ? S.handle : `@${S.handle}`) : '',
-      t0: +(duration - od).toFixed(3),
-      t1: duration,
-      anim: 'fade',
-    });
-  }
-
   const plan = {
-    version: 1,
+    version: 2,
     seed,
     preset,
     presetId: preset.id,
@@ -340,7 +279,8 @@ export function buildPlan({
     } : null,
     musicStart,
     cuts,
-    overlays,
+    overlays: [],
+    subtitles: [],
     copy,
     meta: {
       shots: cuts.length,
@@ -351,6 +291,8 @@ export function buildPlan({
     },
     generatedAt: Date.now(),
   };
+
+  plan.overlays = buildOverlays(plan);
   return plan;
 }
 

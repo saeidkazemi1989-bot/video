@@ -14,6 +14,7 @@ import { renderStyleScreen } from './ui/styleScreen.js';
 import { renderTextScreen } from './ui/textScreen.js';
 import { renderMusicScreen } from './ui/musicScreen.js';
 import { renderPreviewScreen, disposePreview } from './ui/previewScreen.js';
+import { renderEditorScreen } from './ui/editorScreen.js';
 import { renderExportScreen } from './ui/exportScreen.js';
 import { ensurePlan } from './project.js';
 import { ensureFonts } from './core/text.js';
@@ -26,6 +27,7 @@ const SCREENS = {
   3: renderTextScreen,
   4: renderMusicScreen,
   5: renderPreviewScreen,
+  5.5: renderEditorScreen,   // manual timeline editor (reached from the preview)
   6: renderExportScreen,
 };
 
@@ -49,6 +51,7 @@ function rerender() {
     state.step = 1;
   }
   if (step !== 5) disposePreview();
+  state.inEditor = step === 5.5;
   try {
     SCREENS[state.step]($('#screen'), { rerender });
   } catch (e) {
@@ -65,6 +68,7 @@ function boot() {
   setRouter((step) => {
     // stop any running preview audio when leaving the preview step
     if (step !== 5) disposePreview();
+  state.inEditor = step === 5.5;
     const render = SCREENS[step];
     try {
       if (step >= 3) ensurePlan();
@@ -75,7 +79,10 @@ function boot() {
     }
   });
 
-  $('#btn-back').onclick = () => go(state.step - 1);
+  $('#btn-back').onclick = () => {
+    if (state.step === 5.5) return go(5);
+    go(state.step - 1);
+  };
   $('#btn-settings').onclick = () => openSettingsSheet(() => rerender());
   $('#busy').addEventListener('click', (e) => { if (e.target.id === 'busy') { /* keep the overlay */ } });
 
@@ -83,6 +90,7 @@ function boot() {
     node.addEventListener('click', () => {
       const target = Number(node.dataset.step);
       if (target === state.step) return;
+      if (state.step === 5.5) return go(target);
       if (target >= 2 && !state.assets.some((a) => a.use)) return toast('اول رسانه اضافه کن', 'info');
       if (target === 5 || target === 6) {
         const usable = state.assets.filter((a) => a.use);

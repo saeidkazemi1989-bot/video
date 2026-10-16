@@ -4,6 +4,9 @@ import { el, faNum, fmtTime, clamp, vibrate } from '../core/util.js';
 import { ensurePlan, markDirty } from '../project.js';
 import { TimelineRenderer } from '../core/render.js';
 import { go, btn, toast, setBottomBar } from './shell.js';
+import { openSubtitleSheet } from './subtitleScreen.js';
+import { openLibrarySheet } from './librarySheet.js';
+import { patchSettings } from '../project.js';
 
 let renderer = null;
 
@@ -89,10 +92,13 @@ export function renderPreviewScreen(root, { rerender } = {}) {
     el('div', { class: 'kv' }, [el('span', { text: 'فایل‌های استفاده‌شده' }), el('b', { text: `${faNum(plan.meta.assetsUsed)} از ${faNum(state.assets.filter((a) => a.use).length)}` })]),
     el('div', { class: 'kv' }, [el('span', { text: 'ترنزیشن‌ها' }), el('b', { text: faNum(plan.meta.transitions) })]),
     el('div', { class: 'kv' }, [el('span', { text: 'رزولوشن خروجی' }), el('b', { text: `${faNum(plan.width)}×${faNum(plan.height)}` })]),
-    el('div', { class: 'row mt-8' }, [
-      btn('🎲 تدوین متفاوت', { small: true, ghost: true, onClick: () => { ensurePlan({ force: true, reseed: true }); rerender?.(); } }),
-      btn('✂️ تغییر طول/سبک', { small: true, ghost: true, onClick: () => go(2) }),
-      btn('💬 ویرایش متن', { small: true, ghost: true, onClick: () => go(3) }),
+    el('div', { class: 'row mt-8', style: { flexWrap: 'wrap' } }, [
+      btn('✂️ تدوین دستی', { small: true, onClick: () => go(5.5) }),
+      btn('💬 زیرنویس خودکار', { small: true, ghost: true, onClick: () => openSubtitleSheet({ onChange: () => { renderer.renderFrameAt(current, { playing: false }).catch(() => {}); } }) }),
+      btn('🎼 کتابخانهٔ آهنگ', { small: true, ghost: true, onClick: () => openLibrarySheet({ duration: plan.duration, onPick: () => go(4) }) }),
+      btn('🎲 تدوین متفاوت', { small: true, ghost: true, onClick: () => { ensurePlan({ force: true, reseed: true }); markDirty(); rerender?.(); } }),
+      btn('🎨 سبک و طول', { small: true, ghost: true, onClick: () => go(2) }),
+      btn('✏️ ویرایش متن', { small: true, ghost: true, onClick: () => go(3) }),
     ]),
   ]));
 

@@ -8,6 +8,29 @@ import {
   go, btn, toast, setBottomBar, startBusy, updateBusy, stopBusy, slider, seg, openSheet, closeSheet,
 } from './shell.js';
 import { disposePreview } from './previewScreen.js';
+import { openSubtitleSheet } from './subtitleScreen.js';
+
+/** Export the edit decision list so a project can be re-opened elsewhere. */
+function downloadPlanJson(plan) {
+  const data = {
+    app: 'ReelForge',
+    version: plan.version,
+    presetId: plan.presetId,
+    settings: plan.settings,
+    duration: plan.duration,
+    bpm: plan.bpm,
+    musicStart: plan.musicStart,
+    cuts: plan.cuts.map((c) => ({
+      assetId: c.assetId, assetName: c.asset?.name, t0: c.t0, dur: c.dur, trimIn: c.trimIn,
+      trimOut: c.trimOut, speed: c.speed, transition: c.transition, motion: c.motion,
+    })),
+    overlays: plan.overlays,
+    subtitles: plan.subtitles,
+    copy: plan.copy,
+  };
+  downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), 'reelforge-project.json');
+  toast('فایل پروژه ذخیره شد', 'ok');
+}
 
 let exporting = false;
 
@@ -26,7 +49,8 @@ export function renderExportScreen(root, { rerender } = {}) {
     el('div', { class: 'kv' }, [el('span', { text: 'مدت' }), el('b', { text: fmtTime(plan.duration) })]),
     el('div', { class: 'kv' }, [el('span', { text: 'سبک' }), el('b', { text: plan.preset.name })]),
     el('div', { class: 'kv' }, [el('span', { text: 'فریم بر ثانیه' }), el('b', { text: faNum(plan.fps) })]),
-    el('div', { class: 'kv' }, [el('span', { text: 'صدا' }), el('b', { text: plan.music ? `${plan.music.name || 'آهنگ انتخابی'} • ${faNum(plan.bpm)} BPM` : 'صدای اصلی کلیپ‌ها' })]),
+    el('div', { class: 'kv' }, [el('span', { text: 'صدا' }), el('b', { text: plan.music ? `${plan.music.name || 'آهنگ انتخابی'} • ${faNum(plan.bpm)} BPM${plan.music.genre ? ' • ساخت اپ' : ''}` : 'صدای اصلی کلیپ‌ها' })]),
+    plan.subtitles?.length ? el('div', { class: 'kv' }, [el('span', { text: 'زیرنویس' }), el('b', { text: `${faNum(plan.subtitles.length)} خط هم‌زمان با گفتار` })]) : null,
     el('div', { class: 'field mt-8' }, [
       el('label', { text: 'کیفیت خروجی' }),
       el('div', { class: 'stack' }, QUALITIES.map((q) => el('button', {
@@ -98,8 +122,11 @@ export function renderExportScreen(root, { rerender } = {}) {
     el('div', { class: 'cap-block' }, [el('div', { class: 'cap-text cap-hook', text: plan.copy.hook })]),
     el('div', { class: 'cap-block' }, [el('div', { class: 'cap-text', text: plan.copy.body.join('\n') })]),
     el('div', { class: 'cap-block' }, [el('div', { class: 'cap-text', text: plan.copy.tags.join(' ') })]),
-    el('div', { class: 'row' }, [
+    el('div', { class: 'row', style: { flexWrap: 'wrap' } }, [
       btn('✏️ ویرایش متن', { small: true, ghost: true, onClick: () => go(3) }),
+      btn('✂️ تدوین دستی', { small: true, ghost: true, onClick: () => go(5.5) }),
+      btn('💬 زیرنویس', { small: true, ghost: true, onClick: () => openSubtitleSheet({ onChange: () => { plan.settings = { ...state.settings }; } }) }),
+      btn('💾 خروجی پروژه (JSON)', { small: true, ghost: true, onClick: () => downloadPlanJson(plan) }),
       btn('🔁 رندر دوباره', { small: true, ghost: true, disabled: exporting, onClick: () => exportNow() }),
     ]),
   ]));

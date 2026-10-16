@@ -144,9 +144,11 @@ export function isLikelyBlank(canvas) {
 /* asset creation                                                      */
 /* ------------------------------------------------------------------ */
 
+let assetCounter = 0;
+
 export function blankAsset(partial = {}) {
   return {
-    id: uid('a'),
+    id: `${uid('a')}_${++assetCounter}`,
     kind: 'photo',
     name: 'media',
     size: 0,

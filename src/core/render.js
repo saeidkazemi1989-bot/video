@@ -7,6 +7,7 @@ import { createGLRenderer, create2DRenderer } from './gl.js';
 import { drawOverlays, ensureFonts } from './text.js';
 import { decodeImage, makeVideoElement, prepareVideo, seekVideo, THUMB_MAX } from './media.js';
 import { clamp, lerp, sleep, nextFrame, easeOutCubic, easeOutQuint, mulberry32 } from './util.js';
+import { focusAtTime } from './face.js';
 import { buildSoundtrack, audioBufferToWav, encodeAAC } from './audio.js';
 import { createExporter } from './encode.js';
 
@@ -171,10 +172,22 @@ export class TimelineRenderer {
     }
   }
 
+  /** Smart reframe: the crop follows the subject through the shot. */
+  focusFor(asset, srcTime) {
+    if (this.plan.settings?.smartReframe === false) {
+      const f = asset.analysis?.focus;
+      if (Array.isArray(f)) return f;
+      return [0.5, 0.42];
+    }
+    const f = focusAtTime(asset.analysis, srcTime);
+    return [f.x, f.y];
+  }
+
   /** Returns {source, width, height, focus} for the given timeline time. */
   async sourceFor(cut, t) {
     const asset = cut.asset;
-    const focus = asset.analysis?.focus || [0.5, 0.42];
+    const srcTime = (cut.trimIn || 0) + (t - cut.t0) * (cut.speed || 1);
+    const focus = this.focusFor(asset, srcTime);
     if (asset.kind === 'photo') {
       const bmp = await this.getImage(asset);
       return { source: bmp, width: bmp.width || asset.width, height: bmp.height || asset.height, focus };

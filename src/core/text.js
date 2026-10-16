@@ -224,6 +224,111 @@ function drawTextBlock(ctx, {
   return blockH;
 }
 
+/* ------------------------------------------------------------------ */
+/* subtitles (speech-synced, word level)                               */
+/* ------------------------------------------------------------------ */
+
+export const SUBTITLE_STYLES = {
+  plain: { size: 0.042, color: '#ffffff', bg: null, active: '#ffd166', scale: 1.06, shadow: 0.55, stroke: 0, upper: false },
+  box: { size: 0.04, color: '#ffffff', bg: 'rgba(0,0,0,0.62)', active: '#ffd166', scale: 1.05, shadow: 0.2, stroke: 0, upper: false, radius: 0.35, pad: 0.5 },
+  karaoke: { size: 0.045, color: 'rgba(255,255,255,0.92)', bg: null, active: '#00e5ff', scale: 1.14, shadow: 0.5, stroke: 0.05, upper: false },
+  bold: { size: 0.05, color: '#ffffff', bg: null, active: '#ff3d81', scale: 1.1, shadow: 0.4, stroke: 0.1, upper: true },
+};
+
+/**
+ * Draw the subtitle cue active at time `t` with a karaoke-style highlight of the
+ * word being spoken. Word timings come from the speech detector.
+ */
+export function drawSubtitles(ctx, plan, t) {
+  const cues = plan.subtitles;
+  if (!cues?.length) return false;
+  const cue = cues.find((c) => t >= c.t0 && t <= c.t1);
+  if (!cue) return false;
+  const W = ctx.canvas.width;
+  const H = ctx.canvas.height;
+  const st = SUBTITLE_STYLES[plan.settings?.subtitleStyle || 'plain'] || SUBTITLE_STYLES.plain;
+  const rtl = (plan.settings?.lang || 'fa') === 'fa';
+  const sizePx = st.size * H;
+  const maxWidth = W * 0.86;
+
+  ctx.save();
+  ctx.direction = rtl ? 'rtl' : 'ltr';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = fontString({ font: 'sans', weight: 800 }, sizePx);
+
+  const words = (cue.words?.length ? cue.words : cue.text.split(/\s+/).map((w) => ({ w, t0: cue.t0, t1: cue.t1 })));
+  const space = ctx.measureText(' ').width * 1.05;
+  const widths = words.map((w) => ctx.measureText(w.w).width);
+
+  // wrap into lines
+  const lines = [];
+  let line = { items: [], width: 0 };
+  words.forEach((w, i) => {
+    const add = (line.items.length ? space : 0) + widths[i];
+    if (line.width + add > maxWidth && line.items.length) {
+      lines.push(line);
+      line = { items: [], width: 0 };
+    }
+    line.items.push(i);
+    line.width += (line.items.length > 1 ? space : 0) + widths[i];
+  });
+  if (line.items.length) lines.push(line);
+
+  const lineHeight = sizePx * 1.32;
+  const blockH = lines.length * lineHeight;
+  const baseY = H * 0.815 - blockH / 2 + lineHeight / 2;
+
+  // fade in/out (fast, so it never feels laggy)
+  const fadeIn = clamp((t - cue.t0) / 0.12, 0, 1);
+  const fadeOut = clamp((cue.t1 - t) / 0.14, 0, 1);
+  const alpha = Math.min(fadeIn, fadeOut);
+  ctx.globalAlpha = alpha;
+
+  if (st.bg) {
+    const padX = sizePx * (st.pad || 0.5);
+    const padY = sizePx * (st.pad || 0.5) * 0.5;
+    const maxLine = Math.max(...lines.map((l) => l.width));
+    ctx.fillStyle = st.bg;
+    roundRect(ctx, W / 2 - maxLine / 2 - padX, baseY - blockH / 2 - padY + lineHeight / 2 - sizePx * 0.1,
+      maxLine + padX * 2, blockH + padY * 2, sizePx * (st.radius || 0.35));
+    ctx.fill();
+  }
+
+  lines.forEach((l, li) => {
+    const y = baseY + li * lineHeight;
+    let cursor = l.width / 2;
+    for (const wi of l.items) {
+      const word = words[wi];
+      const wWidth = widths[wi];
+      const active = t >= word.t0 && t <= word.t1;
+      const textScale = active ? st.scale : 1;
+      const cx = rtl ? cursor - wWidth / 2 : -(cursor - wWidth / 2);
+      ctx.save();
+      ctx.translate(W / 2 + cx, y);
+      if (textScale !== 1) ctx.scale(textScale, textScale);
+      const label = st.upper && /^[\x00-\x7F\s]*$/.test(word.w) ? word.w.toUpperCase() : word.w;
+      if (st.stroke > 0) {
+        ctx.lineWidth = st.stroke * sizePx;
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+        ctx.strokeText(label, 0, 0);
+      }
+      if (st.shadow > 0) {
+        ctx.shadowColor = `rgba(0,0,0,${st.shadow})`;
+        ctx.shadowBlur = sizePx * 0.5;
+        ctx.shadowOffsetY = sizePx * 0.05;
+      }
+      ctx.fillStyle = active ? st.active : st.color;
+      ctx.fillText(label, 0, 0);
+      ctx.restore();
+      cursor += wWidth + space;
+    }
+  });
+  ctx.restore();
+  return true;
+}
+
 function positionFor(pos, H) {
   switch (pos) {
     case 'top': return H * 0.19;
@@ -363,6 +468,11 @@ export function drawOverlays(ctx, plan, t, { preview = false } = {}) {
     ctx.textBaseline = 'alphabetic';
     ctx.fillText(text, W * 0.05, H * 0.945);
     ctx.shadowBlur = 0;
+  }
+
+  // ---- subtitles (speech-synced) ----
+  if (plan.settings?.subtitles !== false && plan.subtitles?.length) {
+    drawSubtitles(ctx, plan, t);
   }
 
   // ---- global fade out ----

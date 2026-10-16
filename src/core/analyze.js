@@ -6,6 +6,7 @@
  */
 import { clamp, inv, mulberry32, smoothstep } from './util.js';
 import { captureFrame, drawToCanvas } from './media.js';
+import { detectFocus, smoothTrack, trackTravel, nativeFaceBoxes } from './face.js';
 
 const ANALYSIS_MAX = 160;
 
@@ -139,6 +140,21 @@ export function moodOf(stats, motion = null) {
   return 'clean';
 }
 
+/** Where should the crop look? (face → skin blob → saliency) */
+export function focusFromCanvas(canvas, ctx2d = null) {
+  try {
+    const ctx = ctx2d || canvas.getContext('2d', { willReadFrequently: true });
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    return detectFocus(imageData);
+  } catch {
+    return { x: 0.5, y: 0.42, score: 0, source: 'salience', faces: 0 };
+  }
+}
+
+function focusToTuple(f) {
+  return [clamp(f.x, 0, 1), clamp(f.y, 0, 1)];
+}
+
 /**
  * Analyse one asset. For videos we sample several frames to estimate motion and
  * find the most interesting in-point.
@@ -148,12 +164,20 @@ export async function analyzeAsset(asset, { signal, onProgress } = {}) {
   if (asset.kind === 'photo') {
     const canvas = await captureFrame(asset, 0, ANALYSIS_MAX);
     const stats = canvasStats(canvas);
+    let focus = focusFromCanvas(canvas);
+    const native = await nativeFaceBoxes(canvas).catch(() => null);
+    if (native?.length) focus = detectFocus(canvas.getContext('2d'), { nativeFaces: native });
     const analysis = {
       ...stats,
       motion: null,
       score: qualityScore(stats),
       mood: moodOf(stats),
       samples: 1,
+      focus: focusToTuple(focus),
+      focusSource: focus.source,
+      faces: focus.faces || 0,
+      focusTrack: [{ t: 0, x: focus.x, y: focus.y, source: focus.source, score: focus.score }],
+      reframe: { travel: 0, dynamic: false },
       ms: Math.round(performance.now() - start),
     };
     asset.analysis = analysis;
@@ -168,11 +192,19 @@ export async function analyzeAsset(asset, { signal, onProgress } = {}) {
 
   const frames = [];
   const statsList = [];
+  const focusPoints = [];
   for (let i = 0; i < times.length; i++) {
     if (signal?.aborted) throw new DOMException('لغو شد', 'AbortError');
     const c = await captureFrame(asset, times[i], ANALYSIS_MAX);
     frames.push(c);
     statsList.push(canvasStats(c));
+    // smart reframe: where is the subject in this frame?
+    let focus = focusFromCanvas(c);
+    if (i < 2) {
+      const native = await nativeFaceBoxes(c).catch(() => null);
+      if (native?.length) focus = detectFocus(c.getContext('2d'), { nativeFaces: native });
+    }
+    focusPoints.push({ t: times[i], x: focus.x, y: focus.y, source: focus.source, score: focus.score, faces: focus.faces || 0 });
     onProgress?.((i + 1) / times.length);
   }
 
@@ -209,12 +241,22 @@ export async function analyzeAsset(asset, { signal, onProgress } = {}) {
   }
   const suggestedIn = times[bestI] ?? 0;
 
+  // smooth the focus track so the crop drifts with the subject instead of jumping
+  const track = smoothTrack(focusPoints, 2);
+  const travel = trackTravel(track);
+  const bestFocus = track.reduce((a, b) => (b.score > a.score ? b : a), track[0]);
+  const faces = Math.max(...track.map((p) => p.faces || 0), 0);
   const analysis = {
     ...merged,
     score: qualityScore(merged, motion),
     mood: moodOf(merged, motion),
     samples: frames.length,
     suggestedIn,
+    focus: [bestFocus.x, bestFocus.y],
+    focusSource: bestFocus.source,
+    faces,
+    focusTrack: track,
+    reframe: { travel, dynamic: travel > 0.12 },
     ms: Math.round(performance.now() - start),
   };
   asset.analysis = analysis;

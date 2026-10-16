@@ -15,6 +15,9 @@ export const state = {
   output: null,        // { video: Blob, wav: Blob, url, size }
   seed: Math.floor(Math.random() * 99999),
   ai: { provider: 'none', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', apiKey: '' },
+  lastLibrary: null,          // last generated track config (genre/seed/tempo)
+  subtitleSource: null,       // { text, segmentsByAsset, method }
+  editorIndex: 0,             // selected shot in the manual editor
   busy: false,
 };
 
@@ -53,6 +56,8 @@ export function savePrefs() {
 
 export function resetProject() {
   state.assets = [];
+  state.subtitleSource = null;
+  state.editorIndex = 0;
   state.music = null;
   state.plan = null;
   state.output = null;

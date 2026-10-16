@@ -1,6 +1,6 @@
 /** App shell: layout, navigation, bottom bar, toasts, sheets, busy overlay. */
 import { $, el, faNum, vibrate } from '../core/util.js';
-import { state, STEP_TITLES, notify } from '../state.js';
+import { state, STEP_TITLES, notify, savePrefs } from '../state.js';
 
 let router = null;
 export function setRouter(fn) { router = fn; }
@@ -16,10 +16,15 @@ export function go(step) {
 
 export function renderChrome() {
   const bar = $('#appbar-step');
-  if (bar) bar.textContent = `مرحله ${faNum(state.step)} از ۶ — ${STEP_TITLES[state.step - 1]}`;
+  const editor = state.step === 5.5;
+  if (bar) {
+    bar.textContent = editor
+      ? 'تدوین دستی — تایم‌لاین را بکش و بچین'
+      : `مرحله ${faNum(state.step)} از ۶ — ${STEP_TITLES[state.step - 1]}`;
+  }
   document.querySelectorAll('.stepper__item').forEach((node) => {
     const n = Number(node.dataset.step);
-    node.classList.toggle('is-active', n === state.step);
+    node.classList.toggle('is-active', editor ? n === 5 : n === state.step);
     node.classList.toggle('is-done', n < state.step);
   });
   const back = $('#btn-back');

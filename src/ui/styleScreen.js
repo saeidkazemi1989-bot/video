@@ -55,6 +55,7 @@ export function renderStyleScreen(root, { rerender } = {}) {
     switchRow('پایان‌بندی و دعوت به اقدام', 'متن پایانی + آیدی پیج', state.settings.outro !== false, (v) => { patchSettings({ outro: v }); rerender?.(); }),
     switchRow('نوار پیشرفت', 'نوار باریک پیشرفت در بالای کادر', state.settings.progressBar !== false, (v) => { patchSettings({ progressBar: v }); rerender?.(); }),
     switchRow('واترمارک آیدی', 'نمایش آیدی پیج روی ریلز', state.settings.watermark !== false, (v) => { patchSettings({ watermark: v }); rerender?.(); }),
+    switchRow('قاب‌بندی هوشمند', 'تشخیص چهره/سوژه و حرکت آرام کادر همراه او', state.settings.smartReframe !== false, (v) => { patchSettings({ smartReframe: v }); rerender?.(); }),
     el('div', { class: 'field mt-8' }, [
       el('label', { text: 'صدای اصلی کلیپ‌ها زیر موسیقی' }),
       slider({

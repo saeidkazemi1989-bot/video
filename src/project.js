@@ -1,6 +1,7 @@
 /** Plan lifecycle: build / refresh / keep user copy edits. */
 import { state, notify } from './state.js';
 import { buildPlan } from './core/planner.js';
+import { buildOverlays as buildOverlaysShared, attachSubtitles as attachSubtitlesShared } from './core/overlays.js';
 import { autoPreset, getPreset } from './data/styles.js';
 
 export function markDirty() { state.planDirty = true; }
@@ -16,51 +17,30 @@ export function ensurePlan({ force = false, reseed = false } = {}) {
     settings: state.settings,
     seed: state.seed,
   });
+  plan.settings = { ...state.settings };
+  plan._subtitleSource = state.subtitleSource || null;
   if (state.copyOverride) {
     plan.copy = { ...plan.copy, ...state.copyOverride };
     rebuildOverlays(plan);
+  }
+  if (state.subtitleSource?.text && state.settings.subtitles !== false) {
+    plan.subtitles = buildSubtitlesFromSource(plan, state.subtitleSource);
   }
   state.plan = plan;
   state.planDirty = false;
   return plan;
 }
 
+/** Build the speech-synced subtitle cues for a plan. */
+export function buildSubtitlesFromSource(plan, source) {
+  plan._subtitleSource = source;
+  return attachSubtitlesShared(plan, source);
+}
+
 /** Re-time the overlays after the text was edited (no re-render needed). */
 export function rebuildOverlays(plan) {
-  const copy = plan.copy;
-  const preset = getPreset(plan.presetId);
-  const overlays = [];
-  if (plan.settings.hook !== false) {
-    overlays.push({
-      kind: 'hook', text: copy.hook, t0: 0,
-      t1: Math.min(preset.intro.dur + 0.4, plan.duration * 0.35),
-      anim: preset.caption.anim,
-    });
-  }
-  if (plan.settings.captions !== false && copy.lines?.length) {
-    const interior = plan.cuts.slice(1, Math.max(2, plan.cuts.length - 1));
-    const step = Math.max(1, Math.floor(interior.length / copy.lines.length));
-    copy.lines.forEach((text, li) => {
-      const cut = interior[(li * step) % interior.length];
-      if (!cut) return;
-      overlays.push({
-        kind: 'line', text,
-        t0: cut.t0 + Math.min(0.18, cut.dur * 0.12),
-        t1: cut.t0 + Math.max(0.9, Math.min(cut.dur * 0.85, 2.6)),
-        anim: preset.caption.anim,
-      });
-    });
-  }
-  if (plan.settings.outro !== false) {
-    const od = Math.min(preset.outro.dur, Math.max(1.2, plan.duration * 0.18));
-    overlays.push({
-      kind: 'outro', text: copy.cta,
-      handle: plan.settings.handle ? (plan.settings.handle.startsWith('@') ? plan.settings.handle : `@${plan.settings.handle}`) : '',
-      t0: plan.duration - od, t1: plan.duration, anim: 'fade',
-    });
-  }
-  plan.overlays = overlays;
-  return overlays;
+  plan.overlays = buildOverlaysShared(plan);
+  return plan.overlays;
 }
 
 export function commitCopy(patch) {

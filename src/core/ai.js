@@ -84,14 +84,22 @@ Shots: ${shots} — Reel length: ${duration}s`;
   };
 }
 
-/** Optional speech-to-text (OpenAI only) to build an automatic caption. */
-export async function aiTranscribe(blob, filename = 'media.webm', lang = 'fa') {
+/**
+ * Optional speech-to-text. Works with any OpenAI-compatible Whisper endpoint,
+ * including a local server (e.g. faster-whisper / whisper.cpp on your own
+ * machine) exposed as http://localhost:8000/v1.
+ */
+export async function aiTranscribe(blob, filename = 'media.webm', lang = 'fa', { wordTimestamps = true } = {}) {
   if (!aiEnabled()) return null;
   const base = (state.ai.baseUrl || '').replace(/\/+$/, '');
   const form = new FormData();
   form.append('file', blob, filename);
-  form.append('model', 'whisper-1');
+  form.append('model', state.ai.transcribeModel || 'whisper-1');
   if (lang) form.append('language', lang);
+  if (wordTimestamps) {
+    form.append('response_format', 'verbose_json');
+    form.append('timestamp_granularities[]', 'word');
+  }
   const res = await fetch(`${base}/audio/transcriptions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${state.ai.apiKey}` },
@@ -99,7 +107,22 @@ export async function aiTranscribe(blob, filename = 'media.webm', lang = 'fa') {
   });
   if (!res.ok) throw new Error(`تبدیل گفتار به متن ناموفق بود (${res.status})`);
   const json = await res.json();
-  return (json.text || '').trim();
+  const text = (json.text || '').trim();
+  const words = Array.isArray(json.words)
+    ? json.words.map((w) => ({ w: String(w.word || w.text || '').trim(), t0: Number(w.start) || 0, t1: Number(w.end) || 0 }))
+        .filter((w) => w.w)
+    : null;
+  return { text, words, language: json.language };
+}
+
+/** Load a locally stored Whisper model from the device (File System Access API). */
+export async function pickLocalModel() {
+  if (!window.showOpenFilePicker) throw new Error('این مرورگر از انتخاب فایل مدل پشتیبانی نمی‌کند');
+  const [handle] = await window.showOpenFilePicker({
+    types: [{ description: 'Whisper model', accept: { 'application/octet-stream': ['.bin', '.gguf', '.onnx'] } }],
+  });
+  const file = await handle.getFile();
+  return { name: file.name, size: file.size, file };
 }
 
 /** Short summary used by the UI. */
