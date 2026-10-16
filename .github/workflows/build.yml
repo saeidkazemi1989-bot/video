@@ -6,6 +6,11 @@ name: Build ReelForge (APK + web)
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_apk_branch:
+        description: 'آپلود APK در شاخهٔ apk-build (برای لینک دانلود بدون ورود به گیت‌هاب)'
+        type: boolean
+        default: false
   push:
     branches: [main, 'arena/**']
     tags: ['v*']
@@ -79,6 +84,31 @@ jobs:
           mkdir -p out
           cp android/app/build/outputs/apk/debug/*.apk "out/reelforge-${GITHUB_SHA::7}-debug.apk"
           ls -la out
+
+      # Keeps a plain, fetchable copy of the newest APK on the `apk-build` branch so the
+      # file can be pulled over git/https without opening an authenticated release page.
+      # Runs on every version tag, or on demand via the "publish_apk_branch" input.
+      - name: Publish APK to the apk-build branch
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_apk_branch
+        run: |
+          set -euo pipefail
+          apk="$(ls out/*.apk | head -1)"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q --orphan apk-build
+          git rm -rq --cached . > /dev/null 2>&1 || true
+          cp "$apk" reelforge-latest.apk
+          {
+            echo "ریل‌فورج — آخرین APK ساخته‌شده"
+            echo "ref:    ${GITHUB_REF_NAME}"
+            echo "commit: ${GITHUB_SHA}"
+            echo "file:   reelforge-latest.apk"
+            echo "size:   $(stat -c%s reelforge-latest.apk) bytes"
+            echo "built:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > BUILD.txt
+          git add -f reelforge-latest.apk BUILD.txt
+          git commit -q -m "build(apk): ${GITHUB_REF_NAME} ${GITHUB_SHA::7} [skip ci]"
+          git push -f origin apk-build
 
       - name: Diagnostics
         if: always()
