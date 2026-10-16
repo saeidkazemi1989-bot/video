@@ -1,0 +1,92 @@
+name: Build ReelForge (APK + web)
+
+# Builds the Android debug APK and the web (PWA) bundle on GitHub's runners.
+# Trigger: manual (Actions ▸ Run workflow), any push, or a version tag (v1.2.3)
+# which additionally publishes a GitHub Release with the APK attached.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'arena/**']
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform & build tools
+        run: |
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" >/dev/null
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Sync Capacitor (Android)
+        run: npx cap sync android
+
+      - name: Assemble debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/*.apk "out/reelforge-${GITHUB_SHA::7}-debug.apk"
+          ls -la out
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: reelforge-android-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload web bundle (PWA)
+        uses: actions/upload-artifact@v4
+        with:
+          name: reelforge-web-dist
+          path: dist/**
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          generate_release_notes: true
+          body: |
+            ریل‌فورج — نسخهٔ اندروید (APK تستی).
+
+            نصب: فایل APK را روی گوشی باز کن و اجازهٔ «نصب از منابع ناشناس» را بده.
+            برای ساخت iOS به macOS + Xcode نیاز است (به README مراجعه کن).
