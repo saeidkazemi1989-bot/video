@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ریل‌فورج</string>
+    <string name="title_activity_main">ریل‌فورج</string>
+    <string name="package_name">app.reelforge.reel</string>
+    <string name="custom_url_scheme">app.reelforge.reel</string>
+</resources>

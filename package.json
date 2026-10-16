@@ -1,0 +1,45 @@
+{
+  "name": "reelforge",
+  "version": "1.0.0",
+  "description": "ReelForge — از عکس و ویدیوهایت، خودکار یک ریل حرفه‌ای اینستاگرام بساز (اندروید + iOS)",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node tools/test-core.mjs && node tools/test-ui.mjs",
+    "test:core": "node tools/test-core.mjs",
+    "test:ui": "node tools/test-ui.mjs",
+    "cap:sync": "npm run build && npx cap sync",
+    "android": "npm run cap:sync && npx cap open android",
+    "ios": "npm run cap:sync && npx cap open ios",
+    "android:apk": "npm run cap:sync && cd android && ./gradlew assembleDebug",
+    "icons": "node tools/make-icons.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saeidkazemi1989-bot/video.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/saeidkazemi1989-bot/video/issues"
+  },
+  "homepage": "https://github.com/saeidkazemi1989-bot/video#readme",
+  "private": "true",
+  "type": "module",
+  "dependencies": {
+    "@fontsource/vazirmatn": "^5.3.0",
+    "mp4-muxer": "^5.2.2"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/ios": "^8.5.3",
+    "linkedom": "^0.18.13",
+    "sharp": "^0.35.5",
+    "vite": "^8.3.4"
+  }
+}

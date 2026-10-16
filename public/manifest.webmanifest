@@ -1,0 +1,23 @@
+{
+  "name": "ریل‌فورج — ReelForge",
+  "short_name": "ریل‌فورج",
+  "description": "از عکس و ویدیوهایت، یک ریل حرفه‌ای اینستاگرام بساز: برش روی ضرب آهنگ، رنگ‌بندی سینمایی، متن و کپشن خودکار.",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#08080d",
+  "theme_color": "#0b0b12",
+  "categories": ["photo", "video", "productivity"],
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "./icons/icon-1024.png", "sizes": "1024x1024", "type": "image/png" }
+  ],
+  "shortcuts": [
+    { "name": "شروع پروژه جدید", "url": "./index.html?new=1" }
+  ]
+}

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+    />
+    <meta name="theme-color" content="#0b0b12" />
+    <meta name="description" content="ریل‌فورج — ساخت خودکار ریل حرفه‌ای اینستاگرام از عکس و ویدیو" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ریل‌فورج" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="./icons/icon-512.png" />
+    <title>ریل‌فورج | ساخت ریل حرفه‌ای اینستاگرام</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="appbar" class="appbar">
+        <div class="appbar__side">
+          <button id="btn-back" class="iconbtn" aria-label="بازگشت" hidden>‹</button>
+        </div>
+        <div class="appbar__title">
+          <span class="brand">ریل‌فورج</span>
+          <span id="appbar-step" class="appbar__step"></span>
+        </div>
+        <div class="appbar__side">
+          <button id="btn-settings" class="iconbtn" aria-label="تنظیمات">⚙</button>
+        </div>
+      </header>
+
+      <div id="stepper" class="stepper" aria-label="مراحل">
+        <div class="stepper__item" data-step="1"><i>۱</i><span>رسانه</span></div>
+        <div class="stepper__item" data-step="2"><i>۲</i><span>سبک</span></div>
+        <div class="stepper__item" data-step="3"><i>۳</i><span>متن</span></div>
+        <div class="stepper__item" data-step="4"><i>۴</i><span>موسیقی</span></div>
+        <div class="stepper__item" data-step="5"><i>۵</i><span>پیش‌نمایش</span></div>
+        <div class="stepper__item" data-step="6"><i>۶</i><span>خروجی</span></div>
+      </div>
+
+      <main id="screen" class="screen" role="main"></main>
+
+      <div id="bottom-bar" class="bottombar" hidden></div>
+      <div id="toast-host" class="toast-host" aria-live="polite"></div>
+      <div id="sheet-host" class="sheet-host" hidden></div>
+      <div id="busy" class="busy" hidden>
+        <div class="busy__card">
+          <div class="ring"><svg viewBox="0 0 44 44"><circle class="ring__bg" cx="22" cy="22" r="19"></circle><circle id="busy-ring" class="ring__fg" cx="22" cy="22" r="19"></circle></svg><b id="busy-pct">۰٪</b></div>
+          <div id="busy-title" class="busy__title">در حال پردازش…</div>
+          <div id="busy-sub" class="busy__sub"></div>
+          <button id="busy-cancel" class="btn btn--ghost btn--sm" hidden>لغو</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

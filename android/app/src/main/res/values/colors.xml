@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#7C5CFF</color>
+    <color name="colorPrimaryDark">#08080D</color>
+    <color name="colorAccent">#FF3D81</color>
+    <color name="reelforgeBackground">#08080D</color>
+</resources>

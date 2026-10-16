@@ -1,0 +1,21 @@
+{
+  "appId": "app.reelforge.reel",
+  "appName": "ReelForge",
+  "webDir": "dist",
+  "backgroundColor": "#08080d",
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": true
+  },
+  "ios": {
+    "contentInset": "always",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "backgroundColor": "#08080d",
+      "launchShowDuration": 600
+    }
+  }
+}
