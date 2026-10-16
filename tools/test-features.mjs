@@ -17,6 +17,7 @@ import * as Diag from '../src/core/diag.js';
 import { coverRect, containRect, pillowBars, FRAMINGS } from '../src/core/framing.js';
 import * as Save from '../src/core/save.js';
 import { state, migratePrefs, PREFS_VERSION } from '../src/state.js';
+import { buildSoundtrack, musicLoop } from '../src/core/audio.js';
 
 let failures = 0, checks = 0;
 function ok(cond, label, extra = '') {
@@ -1151,6 +1152,54 @@ section('music: device speed → adaptive plan');
     ok(generated.buffer.sampleRate === 32000, 'the returned buffer keeps that rate');
     ok(generated.beats.length > 4 && generated.energy.length > 0, 'the analysis of a 32 kHz track is intact');
   }
+}
+
+
+/* ================================================================== */
+section('music bed loops instead of falling silent');
+
+{
+  const sr = 44100, secs = 8;
+  const ramp = new FakeBuffer(2, sr * secs, sr);
+  const RL = ramp.getChannelData(0);
+  for (let i = 0; i < RL.length; i++) RL[i] = i / RL.length;      // 0 → 1, so a hard
+  ramp.getChannelData(1).set(RL);                                  // wrap is an obvious jump
+
+  const plan20 = [{ t0: 0, t1: 20, dur: 20, asset: { kind: 'image' } }];
+  const rms = (a, from, to) => {
+    let sum = 0;
+    for (let i = from; i < to; i++) sum += a[i] * a[i];
+    return Math.sqrt(sum / Math.max(1, to - from));
+  };
+
+  const bed = musicLoop({ buffer: ramp, bpm: 120 });
+  ok(bed.barSamples === 2 * sr, '120 bpm → a 2 s bar', String(bed.barSamples));
+  ok(bed.loopLen === 4 * bed.barSamples, 'an 8 s track is exactly four bars — nothing is dropped');
+  ok(bed.xfade > 1000 && bed.xfade < sr / 4, 'the seam crossfade is a few tens of ms', String(bed.xfade));
+  const odd = musicLoop({ buffer: new FakeBuffer(2, Math.round(sr * 7.3), sr), bpm: 120 });
+  ok(odd.loopLen === 3 * 2 * sr && odd.loopLen < sr * 7.3, 'a trailing partial bar is left out of the loop', `${odd.loopLen / sr}s of ${7.3}s`);
+  ok(musicLoop({ buffer: ramp, bpm: 0 }).loopLen === ramp.length, 'without a bpm the whole track is the loop');
+  ok(musicLoop({}).loops === false, 'no buffer → no loop');
+
+  const mix = await buildSoundtrack({ musicBuffer: ramp, cuts: plan20, bpm: 120, fadeIn: 0, fadeOut: 0 });
+  const M = mix.channels[0];
+  ok(mix.length >= 20 * sr - 1, 'the soundtrack covers the whole 20 s reel', String(mix.length));
+  ok(mix.loop.wrapped === true, 'the mix reports that it wrapped the bed');
+  ok(Math.abs(M[Math.round(9.5 * sr)] - M[Math.round(1.5 * sr)]) < 0.02,
+    'second time round the 8 s track repeats the first (t=1.5s == t=9.5s on a ramp)',
+    `${M[Math.round(1.5 * sr)].toFixed(4)} vs ${M[Math.round(9.5 * sr)].toFixed(4)}`);
+  ok(Math.abs(M[Math.round(0.4 * sr)] - 0.05) < 0.01, 'the bed starts at the top of the track', M[Math.round(0.4 * sr)].toFixed(4));
+  ok(rms(M, 18 * sr, 20 * sr) > 0.1, 'there is still music in the last second (the bug: silence)', rms(M, 18 * sr, 20 * sr).toFixed(3));
+  const seam = Math.abs(M[mix.loop.loopLen] - M[mix.loop.loopLen - 1]);
+  ok(seam < 0.02, 'the loop seam is crossfaded, not a step', seam.toFixed(5));
+
+  const noLoop = await buildSoundtrack({ musicBuffer: ramp, cuts: plan20, bpm: 120, loop: false, fadeIn: 0, fadeOut: 0 });
+  ok(rms(noLoop.channels[0], 18 * sr, 20 * sr) === 0, 'loop:false keeps the old behaviour (silent tail)');
+  ok(noLoop.loop.wrapped === false, 'and says so');
+
+  // a start offset inside the track is clamped into the loop window, never past it
+  const offset = await buildSoundtrack({ musicBuffer: ramp, musicStart: 99, cuts: [{ t0: 0, t1: 3, dur: 3, asset: { kind: 'image' } }], bpm: 120, fadeIn: 0, fadeOut: 0 });
+  ok(rms(offset.channels[0], 0, 3 * sr) > 0, 'a musicStart past the end still produces music instead of silence');
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} feature checks passed`);

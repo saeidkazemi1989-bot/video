@@ -8,7 +8,7 @@ import { drawOverlays, ensureFonts } from './text.js';
 import { decodeImage, makeVideoElement, prepareVideo, seekVideo, THUMB_MAX } from './media.js';
 import { clamp, lerp, sleep, nextFrame, easeOutCubic, easeOutQuint, mulberry32 } from './util.js';
 import { focusAtTime } from './face.js';
-import { buildSoundtrack, audioBufferToWav, encodeAAC } from './audio.js';
+import { buildSoundtrack, audioBufferToWav, encodeAAC, musicLoop } from './audio.js';
 import { createExporter } from './encode.js';
 
 /** Motion language per cut -> shader uniforms. */
@@ -285,7 +285,15 @@ export class TimelineRenderer {
       gain.gain.value = clamp(plan.settings.musicGain ?? 1, 0, 2);
       source.connect(gain).connect(audioContext.destination);
       startTime = audioContext.currentTime + 0.08 - startAt;
-      const bufT = clamp(plan.musicStart + startAt - this.musicOffset, 0, Math.max(0, this.musicBuffer.duration - 0.05));
+      // the same bar-aligned loop window the export mixes (WebAudio cuts hard at the
+      // seam, the export crossfades it — the preview must not fall silent early)
+      const bed = musicLoop({ buffer: this.musicBuffer, bpm: plan.music?.bpm || 0 });
+      if (bed.loops && plan.duration > bed.loopLen / bed.sampleRate + 0.05) {
+        source.loop = true;
+        source.loopStart = 0;
+        source.loopEnd = bed.loopLen / bed.sampleRate;
+      }
+      const bufT = clamp(plan.musicStart + startAt - this.musicOffset, 0, Math.max(0, Math.min(this.musicBuffer.duration, bed.loopLen / bed.sampleRate) - 0.05));
       source.start(startTime, bufT);
     }
     // original clip sound is played by the video elements themselves
@@ -338,6 +346,7 @@ export class TimelineRenderer {
       onProgress?.(0.01, 'ساخت موسیقی و میکس صدا…');
       soundtrack = await buildSoundtrack({
         musicBuffer: this.musicBuffer,
+        bpm: plan.music?.bpm || 0,
         musicStart: Math.max(0, (plan.musicStart || 0) - this.musicOffset),
         cuts: plan.cuts.map((c) => ({ ...c, asset: c.asset })),
         duck: this.musicBuffer ? (plan.preset.music?.duck ?? 0.5) : 1,
