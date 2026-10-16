@@ -11,6 +11,7 @@ import { buildPlan, DEFAULT_SETTINGS } from '../src/core/planner.js';
 import { attachSubtitles } from '../src/core/overlays.js';
 import { drawSubtitles, SUBTITLE_STYLES } from '../src/core/text.js';
 import * as Upd from '../src/core/update.js';
+import * as Diag from '../src/core/diag.js';
 
 let failures = 0, checks = 0;
 function ok(cond, label, extra = '') {
@@ -664,6 +665,82 @@ section('update engine («بروزرسانی»)');
   const docLike = { querySelectorAll: () => [{ getAttribute: () => './assets/index-FROMDOM.js' }] };
   ok(Upd.runningAssetName(docLike, { getEntriesByType: () => [] }) === 'index-FROMDOM.js', 'falls back to <script src>');
   ok(Upd.runningAssetName({ querySelectorAll: () => [] }, { getEntriesByType: () => [] }) === '', 'nothing to detect → empty');
+}
+
+
+/* ================================================================== */
+section('device diagnostics («وضعیت دستگاه»)');
+
+{
+  Diag.recordError(new Error('Shader error: fetchPrev'), 'step 5');
+  ok(Diag.lastErrors().length >= 1, 'errors are remembered');
+  ok(Diag.lastErrors().at(-1).where === 'step 5', 'the stage is recorded');
+  ok(Diag.lastErrors().at(-1).text.includes('fetchPrev'), 'the message is recorded');
+  for (let i = 0; i < 20; i++) Diag.recordError(`e${i}`, 'x');
+  ok(Diag.lastErrors().length <= 12, 'the error log is a bounded ring buffer', String(Diag.lastErrors().length));
+  ok(Diag.recordError('plain string').text === 'plain string', 'string errors are accepted');
+
+  // a phone-like environment: WebGL2 present, WebCodecs missing, native face detector
+  const fakeWin = {
+    navigator: { userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/140 Mobile Safari', language: 'fa-IR', hardwareConcurrency: 8, deviceMemory: 8 },
+    screen: { width: 1080, height: 2400 },
+    devicePixelRatio: 2.75,
+    Capacitor: { getPlatform: () => 'android', isNativePlatform: () => true },
+    document: { createElement: () => ({ width: 0, height: 0, getContext: () => null }) },
+    AudioContext: class {}, OfflineAudioContext: class {},
+    FaceDetector: class {},
+  };
+  const report = await Diag.deviceReport(fakeWin, { extra: { step: 5 } });
+  ok(report.platform === 'android' && report.native === true, 'native platform is reported');
+  ok(report.webgl2?.ok === false, 'a missing WebGL2 context is reported, not thrown', JSON.stringify(report.webgl2));
+  ok(report.webgl2?.reason === 'webgl2-unavailable', 'the probe explains why');
+  ok(report.encoder?.supported === false && report.encoder.reason === 'no-webcodecs', 'WebCodecs absence is detected');
+  ok(report.audio.offlineAudioContext === true, 'audio support detected');
+  ok(report.faceDetector === true, 'native FaceDetector detected');
+  ok(report.screen === '1080×2400 @2.75x', 'screen + dpr reported', report.screen);
+  ok(report.cores === 8 && report.memoryGB === 8, 'cores/memory reported');
+
+  const text = Diag.reportText(report);
+  ok(text.includes('webgl2: FAILED (webgl2-unavailable)'), 'text report spells out the WebGL failure', text.split('\n').find((l) => l.startsWith('webgl2')));
+  ok(text.includes('encoder: unsupported (no-webcodecs)'), 'text report spells out the encoder state');
+  ok(text.includes('platform: android (native)'), 'text report names the platform');
+  ok(text.includes('recent errors:'), 'text report carries the recent errors');
+  ok(text.split('\n').every((l) => l.length < 400), 'text report lines stay readable');
+
+  const rows = Diag.reportRows(report);
+  ok(rows.length >= 8, 'diagnostics sheet has rows', String(rows.length));
+  ok(rows.every(([k, v]) => k && v !== undefined && v !== null && v !== ''), 'no empty rows');
+  ok(rows.some(([k]) => k.includes('گرافیک')), 'graphics row exists');
+  ok(rows.some(([k, v]) => k.includes('کدگذار') && String(v).includes('غیرفعال')), 'encoder row flags the problem');
+
+  // a healthy environment must read as healthy
+  const goodWin = {
+    navigator: { userAgent: 'Mozilla/5.0 Chrome/140', language: 'en', hardwareConcurrency: 8 },
+    screen: { width: 412, height: 915 }, devicePixelRatio: 2.6,
+    VideoEncoder: { isConfigSupported: async () => ({ supported: true }) },
+    VideoFrame: class {},
+    AudioContext: class {}, OfflineAudioContext: class {},
+    document: {
+      createElement: () => ({
+        getContext: () => ({
+          getExtension: () => null,
+          getParameter: (p) => ({ 0x1F00: 'Google', 0x1F01: 'Adreno 730', 0x1F02: 'WebGL 2.0', 0x8B8C: 'WebGL GLSL ES 3.00' }[p] || 4096),
+          getShaderPrecisionFormat: () => ({ precision: 23, rangeMin: 127, rangeMax: 127 }),
+          FRAGMENT_SHADER: 35632, HIGH_FLOAT: 36336, VENDOR: 0x1F00, RENDERER: 0x1F01, VERSION: 0x1F02,
+          SHADING_LANGUAGE_VERSION: 0x8B8C, MAX_TEXTURE_SIZE: 0x0D33,
+        }),
+      }),
+    },
+  };
+  const goodReport = await Diag.deviceReport(goodWin);
+  ok(goodReport.webgl2?.ok === true, 'a working GL context is reported as ok');
+  ok(goodReport.webgl2.renderer === 'Adreno 730', 'the GL renderer string is captured', goodReport.webgl2.renderer);
+  ok(goodReport.webgl2.highpFragment === true, 'highp fragment precision is captured');
+  ok(goodReport.encoder.supported === true, 'encoder support detected');
+  ok(Diag.reportText(goodReport).includes('webgl2: ok'), 'healthy report reads as ok');
+  ok(Diag.reportRows(goodReport).some(([k, v]) => k.includes('کدگذار') && String(v).includes('فعال')), 'healthy encoder row');
+  ok(Diag.reportText({}).length > 0, 'an empty report still renders without throwing');
+  ok(Diag.reportRows({}).length >= 1, 'reportRows never returns nothing');
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} feature checks passed`);

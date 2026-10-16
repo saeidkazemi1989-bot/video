@@ -4,7 +4,7 @@
  */
 import { clamp } from './util.js';
 
-const VERT = `#version 300 es
+export const VERT_SRC = `#version 300 es
 in vec2 aPos;
 out vec2 vUv;
 void main(){
@@ -12,7 +12,7 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }`;
 
-const FRAG = `#version 300 es
+export const FRAG_SRC = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 outColor;
@@ -81,6 +81,12 @@ vec2 mapUv(vec2 cv, out float inside){
   return uv;
 }
 
+// The previous shot is snapshotted *after* compositing, so it lives in output uv space
+// (0..1 of the canvas) — no cover mapping needed, just the parallax offset.
+vec3 fetchPrev(vec2 uv){
+  return texture(uPrev, clamp(uv, 0.0, 1.0)).rgb;
+}
+
 vec3 grade(vec3 col, vec2 uv){
   col *= uExposure;
   // white balance
@@ -121,7 +127,6 @@ vec3 grade(vec3 col, vec2 uv){
 void main(){
   vec2 uv = vUv;
   float tp = smoothstep(0.0, 1.0, clamp(uTrans, 0.0, 1.0));
-  float out0 = 1.0 - smoothstep(0.0, 1.0, clamp(uTrans, 0.0, 1.0));
 
   // ---- per-transition geometry on the incoming frame ----
   vec2 warp = vec2(0.0);
@@ -229,7 +234,9 @@ void main(){
 
   // ---- focus pull / vignette / grain ----
   if (uVignette > 0.001) {
-    vec2 d = (uv - vec2(0.5, 0.46)) * vec2(1.05, 1.0);
+    // lean the vignette toward the detected subject instead of the frame centre
+    vec2 vc = mix(vec2(0.5, 0.46), clamp(uFocus, 0.0, 1.0), 0.22);
+    vec2 d = (uv - vc) * vec2(1.05, 1.0);
     float v = smoothstep(0.35, 0.95, length(d) * 1.35);
     col *= 1.0 - uVignette * v;
   }
@@ -268,12 +275,21 @@ export function createGLRenderer(canvas) {
   });
   if (!gl) return null;
 
-  const prog = gl.createProgram();
-  gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT));
-  gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG));
-  gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-    throw new Error('Program link error: ' + gl.getProgramInfoLog(prog));
+  let prog;
+  try {
+    prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT_SRC));
+    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG_SRC));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      throw new Error('Program link error: ' + gl.getProgramInfoLog(prog));
+    }
+  } catch (e) {
+    // A driver that rejects our GLSL must never blank the preview: the 2D
+    // compositor is slower and simpler, but it always draws.
+    console.warn('[reelforge] WebGL disabled —', e.message);
+    try { gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch { /* ignore */ }
+    return null;
   }
   gl.useProgram(prog);
 

@@ -9,6 +9,8 @@ import {
 } from './shell.js';
 import { disposePreview } from './previewScreen.js';
 import { openSubtitleSheet } from './subtitleScreen.js';
+import { webCodecsSupported } from '../core/encode.js';
+import { openDiagSheet } from './diagSheet.js';
 
 /** Export the edit decision list so a project can be re-opened elsewhere. */
 function downloadPlanJson(plan) {
@@ -38,6 +40,18 @@ export function renderExportScreen(root, { rerender } = {}) {
   const plan = ensurePlan();
   root.innerHTML = '';
   const wrap = el('div', { class: 'stack' });
+
+  // Fail early and legibly: without WebCodecs the render cannot happen, and a
+  // silent button that does nothing is the worst possible outcome on a phone.
+  if (!webCodecsSupported()) {
+    wrap.append(el('div', { class: 'card' }, [
+      el('b', { text: 'این گوشی کدگذاری ویدیو (WebCodecs) را پشتیبانی نمی‌کند' }),
+      el('div', { class: 'muted', text: 'رندر MP4 روی همین دستگاه ممکن نیست. می‌توانی از مرحلهٔ پیش‌نمایش فیلم بگیری، یا با «وضعیت دستگاه» گزارش را بفرستی تا راه‌حل بدهم.', style: { marginTop: '6px' } }),
+      el('div', { class: 'row', style: { marginTop: '10px' } }, [
+        btn('وضعیت دستگاه', { small: true, onClick: () => openDiagSheet() }),
+      ]),
+    ]));
+  }
   root.append(wrap);
   const rerenderAll = () => renderExportScreen(document.getElementById('screen'), {});
 

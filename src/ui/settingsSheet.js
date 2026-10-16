@@ -3,6 +3,7 @@ import { state, savePrefs } from '../state.js';
 import { el } from '../core/util.js';
 import { openSheet, closeSheet, btn, toast, chips } from './shell.js';
 import { openUpdateSheet } from './updateSheet.js';
+import { openDiagSheet } from './diagSheet.js';
 import { APP_VERSION, faVersion } from '../core/update.js';
 
 const PROVIDERS = [
@@ -66,6 +67,13 @@ export function openSettingsSheet(onSaved) {
         el('div', { class: 'row row--between' }, [
           el('span', { class: 'muted', text: `نسخهٔ نصب‌شده: ${faVersion(APP_VERSION)}` }),
           btn('بررسی بروزرسانی ⟳', { small: true, onClick: () => openUpdateSheet() }),
+        ]),
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { text: 'پشتیبانی' }),
+        el('div', { class: 'row row--between' }, [
+          el('span', { class: 'muted', text: 'اگر جایی خطا دیدی، این گزارش را بفرست' }),
+          btn('وضعیت دستگاه', { small: true, onClick: () => openDiagSheet() }),
         ]),
       ]),
       el('div', { class: 'row' }, [

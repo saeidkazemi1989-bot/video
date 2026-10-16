@@ -19,6 +19,8 @@ import { renderEditorScreen } from './ui/editorScreen.js';
 import { renderExportScreen } from './ui/exportScreen.js';
 import { ensurePlan } from './project.js';
 import { ensureFonts } from './core/text.js';
+import { recordError, deviceReport, reportText } from './core/diag.js';
+import { copyText } from './core/util.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -31,6 +33,35 @@ const SCREENS = {
   5.5: renderEditorScreen,   // manual timeline editor (reached from the preview)
   6: renderExportScreen,
 };
+
+/**
+ * A screen that throws must tell us *why* — the phone is the only place half of
+ * this stack runs, so offer the device report next to the message.
+ */
+async function showErrorCard(message, where = '') {
+  recordError(message, where);
+  const screen = $('#screen');
+  screen.innerHTML = '';
+  const report = await deviceReport().catch(() => null);
+  const card = Object.assign(document.createElement('div'), { className: 'card' });
+  const title = Object.assign(document.createElement('b'), { textContent: 'خطا در نمایش این مرحله:' });
+  const body = Object.assign(document.createElement('div'), {
+    textContent: String(message),
+    style: { marginTop: '8px', lineHeight: '1.9', wordBreak: 'break-word', direction: 'ltr', textAlign: 'left', fontSize: '12.5px' },
+  });
+  const hint = Object.assign(document.createElement('div'), {
+    className: 'muted',
+    textContent: 'گزارش دستگاه را کپی کن و بفرست تا دقیقاً بدانم کدام قابلیت گوشی مشکل داشته.',
+    style: { margin: '12px 0 8px' },
+  });
+  const copy = Object.assign(document.createElement('button'), { className: 'btn btn--sm', textContent: '📋 کپی گزارش دستگاه' });
+  copy.onclick = async () => {
+    const okCopy = report ? await copyText(reportText(report)) : false;
+    toast(okCopy ? 'گزارش کپی شد' : 'کپی نشد — از تنظیمات ▸ وضعیت دستگاه بگیر', okCopy ? 'ok' : 'err');
+  };
+  card.append(title, body, hint, copy);
+  screen.append(card);
+}
 
 function rerender() {
   const step = state.step;
@@ -57,11 +88,7 @@ function rerender() {
     SCREENS[state.step]($('#screen'), { rerender });
   } catch (e) {
     console.error(e);
-    $('#screen').innerHTML = '';
-    $('#screen').append(Object.assign(document.createElement('div'), {
-      className: 'card',
-      textContent: `خطا در نمایش این مرحله: ${e.message}`,
-    }));
+    showErrorCard(e?.message || e, `step ${state.step}`);
   }
 }
 
@@ -77,6 +104,7 @@ function boot() {
     } catch (e) {
       console.error(e);
       toast(e.message || 'خطای نامشخص', 'err');
+      showErrorCard(e?.message || e, `router step ${step}`);
     }
   });
 

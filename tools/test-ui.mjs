@@ -115,6 +115,7 @@ const { renderEditorScreen } = await import('../src/ui/editorScreen.js');
 const { openSubtitleSheet } = await import('../src/ui/subtitleScreen.js');
 const { openUpdateSheet, applyUpdateAction } = await import('../src/ui/updateSheet.js');
 const Upd = await import('../src/core/update.js');
+const { openDiagSheet } = await import('../src/ui/diagSheet.js');
 const { ensurePlan, planSummary } = await import('../src/project.js');
 
 let failures = 0;
@@ -434,6 +435,23 @@ console.log('\n▸ update button («بروزرسانی»)');
   // no service worker in tests → applying tells us it could not reload
   const applied = await applyUpdateAction('none');
   ok(applied === 'check' || applied === 'none', 'applyUpdateAction survives without a service worker', applied);
+  closeSheet();
+}
+
+
+console.log('\n▸ device report sheet');
+{
+  openDiagSheet();
+  const sheet = document.getElementById('sheet-host');
+  ok(sheet.hidden === false, 'diagnostics sheet opens');
+  ok(sheet.textContent.includes('وضعیت دستگاه'), 'sheet is titled «وضعیت دستگاه»');
+  // the report resolves asynchronously (probes) — let the microtasks settle
+  await new Promise((r) => setTimeout(r, 30));
+  ok(sheet.textContent.includes('نسخهٔ اپ'), 'report lists the app version');
+  ok(sheet.textContent.includes('گرافیک'), 'report lists the graphics capability');
+  ok(sheet.textContent.includes('کدگذار ویدیو'), 'report lists the encoder capability');
+  ok([...sheet.querySelectorAll('button')].some((b) => b.textContent.includes('کپی گزارش')), 'report can be copied');
+  ok([...sheet.querySelectorAll('button')].some((b) => b.textContent.includes('بستن')), 'sheet can be closed');
   closeSheet();
 }
 
