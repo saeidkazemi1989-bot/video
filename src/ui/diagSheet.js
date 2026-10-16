@@ -1,7 +1,26 @@
 /** «وضعیت دستگاه» sheet — capability report the user can copy and send. */
 import { el, faNum, copyText } from '../core/util.js';
+import { state } from '../state.js';
 import { openSheet, btn, toast } from './shell.js';
 import { deviceReport, reportText, reportRows, lastErrors } from '../core/diag.js';
+
+/** What the user actually chose — so a report can explain "reversed"/"zoomed" bugs. */
+export function appContext() {
+  const photos = state.assets.filter((a) => a.kind === 'photo' && a.use).length;
+  const videos = state.assets.filter((a) => a.kind === 'video' && a.use).length;
+  return {
+    stage: state.step === 5.5 ? '۵٫۵ تدوین دستی' : `مرحله ${faNum(state.step)}`,
+    assets: `${faNum(photos)} عکس · ${faNum(videos)} ویدیو`,
+    duration: state.settings.duration,
+    framing: state.settings.framing || 'fit',
+    order: state.settings.orderMode || 'intake',
+    quality: state.settings.quality || '',
+    fps: state.settings.fps || 30,
+    preset: state.presetId,
+    music: state.music ? (state.music.generated ? `ساخت اپ (${state.music.name || ''})` : state.music.name || 'فایل خودم') : 'بدون موسیقی',
+    subtitles: state.settings.subtitles ? 'روشن' : 'خاموش',
+  };
+}
 
 export function openDiagSheet() {
   openSheet(({ close }) => {
@@ -12,7 +31,7 @@ export function openDiagSheet() {
     box.append(actions);
 
     (async () => {
-      const report = await deviceReport();
+      const report = await deviceReport(globalThis, { context: appContext() });
       body.innerHTML = '';
       for (const [label, value] of reportRows(report)) {
         body.append(el('div', { class: 'listitem' }, [

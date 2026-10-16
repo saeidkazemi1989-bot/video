@@ -20,6 +20,7 @@ import { renderExportScreen } from './ui/exportScreen.js';
 import { ensurePlan } from './project.js';
 import { ensureFonts } from './core/text.js';
 import { recordError, deviceReport, reportText } from './core/diag.js';
+import { appContext } from './ui/diagSheet.js';
 import { copyText } from './core/util.js';
 
 const $ = (s) => document.querySelector(s);
@@ -42,7 +43,7 @@ async function showErrorCard(message, where = '') {
   recordError(message, where);
   const screen = $('#screen');
   screen.innerHTML = '';
-  const report = await deviceReport().catch(() => null);
+  const report = await deviceReport(globalThis, { context: appContext() }).catch(() => null);
   const card = Object.assign(document.createElement('div'), { className: 'card' });
   const title = Object.assign(document.createElement('b'), { textContent: 'خطا در نمایش این مرحله:' });
   const body = Object.assign(document.createElement('div'), {

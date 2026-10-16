@@ -10,6 +10,7 @@
  * Everything is injectable (plugins + fs) so the whole flow is testable in Node.
  */
 import { downloadBlob } from './util.js';
+import { recordSave } from './diag.js';
 
 /** Where files land on a device (inside the app's public Documents folder). */
 export const SAVE_FOLDER = 'ReelForge';
@@ -180,6 +181,7 @@ export async function shareSavedFile({ uri = null, blob = null, filename = 'reel
 /** One call the UI can use: save, then say exactly where the file went. */
 export async function saveWithReport(blob, filename, opts = {}) {
   const res = await saveBlob(blob, filename, opts);
+  try { recordSave({ ...res, bytes: res.bytes ?? blob?.size }); } catch { /* diagnostics are best-effort */ }
   res.message = res.ok
     ? (res.method === 'files'
       ? `ذخیره شد در ${res.display}/${filename}`

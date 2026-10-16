@@ -47,6 +47,28 @@ export const STEP_TITLES = [
   'خروجی نهایی',
 ];
 
+export const PREFS_VERSION = 2;
+
+/**
+ * One-time upgrades for stored preferences. Returns true when something changed
+ * (so the caller can write the migrated values back).
+ *
+ * v1 → v2: «ترتیب هوشمند» used to be the default and silently reordered the
+ * user's media («ویدیو عکس‌ها را برعکس کرده بود»). Anyone who never opened that
+ * control still has `orderMode: 'smart'` in their saved prefs, so on upgrade we
+ * move them to the order they actually picked in the picker.
+ */
+export function migratePrefs(prefs = null) {
+  const from = Number(prefs?.settingsVersion || 0);
+  if (from >= PREFS_VERSION) return false;
+  let changed = false;
+  if (from < 2 && state.settings.orderMode === 'smart') {
+    state.settings.orderMode = 'intake';
+    changed = true;
+  }
+  return changed;
+}
+
 export async function loadPrefs() {
   const prefs = await idbGet('prefs');
   if (!prefs) return;
@@ -54,10 +76,12 @@ export async function loadPrefs() {
   if (prefs.settings) state.settings = { ...state.settings, ...prefs.settings };
   if (state.settings.autoUpdateCheck === undefined) state.settings.autoUpdateCheck = true;
   if (prefs.ai) state.ai = { ...state.ai, ...prefs.ai };
+  if (migratePrefs(prefs)) await savePrefs();
 }
 
 export function savePrefs() {
   return idbSet('prefs', {
+    settingsVersion: PREFS_VERSION,
     presetId: state.presetId,
     settings: state.settings,
     ai: state.ai,

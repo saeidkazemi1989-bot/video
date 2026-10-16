@@ -11,6 +11,7 @@ import { disposePreview } from './previewScreen.js';
 import { openSubtitleSheet } from './subtitleScreen.js';
 import { webCodecsSupported } from '../core/encode.js';
 import { saveWithReport, shareSavedFile, isNativeApp, SAVE_DISPLAY } from '../core/save.js';
+import { recordRender } from '../core/diag.js';
 import { openDiagSheet } from './diagSheet.js';
 
 /** Export the edit decision list so a project can be re-opened elsewhere. */
@@ -200,6 +201,7 @@ export function renderExportScreen(root, { rerender } = {}) {
       scale: 1,
       musicBuffer: state.music?.buffer || null,
     });
+    const t0 = performance.now();
     try {
       const quality = QUALITIES.find((q) => q.id === state.settings.quality) || QUALITIES[0];
       const result = await renderer.exportVideo({
@@ -207,6 +209,9 @@ export function renderExportScreen(root, { rerender } = {}) {
         signal: controller.signal,
         quality,
       });
+      const ms = performance.now() - t0;
+      const frames = Math.round(planRef.duration * (planRef.fps || 30));
+      recordRender({ frames, ms, fps: frames / Math.max(0.001, ms / 1000), quality: quality.id, renderer: renderer.useGL ? 'WebGL2' : '2D' });
       stopBusy();
       if (state.output?.url) URL.revokeObjectURL(state.output.url);
       const url = URL.createObjectURL(result.video);

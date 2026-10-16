@@ -16,6 +16,7 @@ import * as Upd from '../src/core/update.js';
 import * as Diag from '../src/core/diag.js';
 import { coverRect, containRect, pillowBars, FRAMINGS } from '../src/core/framing.js';
 import * as Save from '../src/core/save.js';
+import { state, migratePrefs, PREFS_VERSION } from '../src/state.js';
 
 let failures = 0, checks = 0;
 function ok(cond, label, extra = '') {
@@ -743,6 +744,52 @@ section('device diagnostics («وضعیت دستگاه»)');
   ok(goodReport.encoder.supported === true, 'encoder support detected');
   ok(Diag.reportText(goodReport).includes('webgl2: ok'), 'healthy report reads as ok');
   ok(Diag.reportRows(goodReport).some(([k, v]) => k.includes('کدگذار') && String(v).includes('فعال')), 'healthy encoder row');
+
+/* ---- diagnostics: state, context, render/save history ---- */
+{
+  const mkNav = (regs, controller) => ({ serviceWorker: { getRegistrations: async () => regs, controller } });
+  ok(await Diag.probeServiceWorker({}) === 'unsupported', 'no serviceWorker → unsupported');
+  ok(await Diag.probeServiceWorker({ navigator: mkNav([], null) }) === 'not-registered', 'no registrations → not-registered');
+  ok(await Diag.probeServiceWorker({ navigator: mkNav([{}], null) }) === 'registered', 'registered without a controller');
+  ok(await Diag.probeServiceWorker({ navigator: mkNav([{}], {}) }) === 'active', 'a controlling worker is active');
+  ok(await Diag.probeServiceWorker({ navigator: { serviceWorker: { getRegistrations: async () => { throw new Error('x'); } } } }) === 'unknown', 'a broken SW API is reported as unknown');
+  ok(await Diag.probeServiceWorker({ navigator: { serviceWorker: {} } }) === 'not-registered', 'no getRegistrations → treated as none');
+
+  // encoder mode: hardware first, software fallback
+  const hw = await Diag.probeEncoder({ VideoEncoder: { isConfigSupported: async (c) => ({ supported: c.hardwareAcceleration === 'prefer-hardware' }) }, VideoFrame: class {} });
+  ok(hw.supported === true && hw.mode === 'hardware', 'hardware encoding is detected', JSON.stringify(hw));
+  const swOnly = await Diag.probeEncoder({ VideoEncoder: { isConfigSupported: async (c) => ({ supported: !c.hardwareAcceleration }) }, VideoFrame: class {} });
+  ok(swOnly.supported === true && swOnly.mode === 'default', 'software-only encoders are detected', JSON.stringify(swOnly));
+
+  Diag.recordRender({ frames: 900, ms: 95_000, quality: '1080p', renderer: 'WebGL2' });
+  Diag.recordRender({ frames: 600, ms: 40_000, quality: '720p', renderer: '2D' });
+  ok(Diag.lastRenders().length === 2, 'renders are remembered');
+  const r0 = Diag.lastRenders().at(-1);
+  ok(r0.seconds === 40 && r0.fps > 14 && r0.fps < 16, 'render fps is derived from wall time', JSON.stringify(r0));
+  for (let i = 0; i < 5; i++) Diag.recordRender({ frames: 1, ms: 1000 });
+  ok(Diag.lastRenders().length === 3, 'render history is bounded');
+
+  Diag.recordSave({ ok: true, method: 'files', display: 'Documents/ReelForge', path: 'ReelForge/a.mp4', bytes: 1024 });
+  Diag.recordSave({ ok: false, error: 'quota' });
+  ok(Diag.lastSaves().length === 2 && Diag.lastSaves().at(-1).ok === false, 'saves are remembered, including failures');
+
+  const ctx = { stage: 'مرحله ۶', assets: '۳ عکس · ۱ ویدیو', duration: 30, framing: 'fill', order: 'smart', quality: '1080p', fps: 30, preset: 'viral', music: 'ساخت اپ' };
+  const reportWin = {
+    navigator: { userAgent: 'UA', serviceWorker: { getRegistrations: async () => [], controller: null } },
+    document: { createElement: () => ({ getContext: () => null }) },
+  };
+  const withCtx = await Diag.deviceReport(reportWin, { context: ctx });
+  const text2 = Diag.reportText(withCtx);
+  ok(text2.includes('stage: مرحله ۶'), 'the report names the stage', text2);
+  ok(text2.includes('framing=fill') && text2.includes('order=smart'), 'the report carries the framing + order the user chose');
+  ok(text2.includes('render: 1 frames in 1s'), 'render history is in the report');
+  ok(text2.includes('save: FAILED (quota)'), 'save failures are in the report');
+  ok(text2.includes('serviceWorker: not-registered'), 'the worker state is explicit');
+  ok(Diag.reportRows(withCtx).some(([k]) => k === 'آخرین رندر'), 'the sheet shows the last render');
+  ok(Diag.reportRows(withCtx).some(([k, v]) => k === 'آخرین ذخیره' && String(v).includes('ناموفق')), 'the sheet shows the last save');
+  ok(Diag.reportRows(withCtx).some(([k, v]) => k === 'تنظیمات تدوین' && String(v).includes('پرکردن قاب')), 'the sheet shows the framing mode');
+}
+
   ok(Diag.reportText({}).length > 0, 'an empty report still renders without throwing');
   ok(Diag.reportRows({}).length >= 1, 'reportRows never returns nothing');
 }
@@ -950,6 +997,24 @@ section('music render progress (no more parking at 90%)');
     await Mod.renderWithProgress(new FakeOffline(44100 * 4), { duration: 2, steps: 3, signal: controller.signal, onProgress: () => {} });
   } catch (e) { aborted = e.name; }
   ok(aborted === 'AbortError', 'an aborted build stops early', aborted);
+}
+
+
+/* ---- one-time preference migration (the "reversed media" complaint) ---- */
+{
+  state.settings.orderMode = 'smart';
+  const migrated = migratePrefs({ settingsVersion: 1, settings: { orderMode: 'smart' } });
+  ok(migrated === true, 'an old prefs blob is migrated');
+  ok(state.settings.orderMode === 'intake', 'the untouched "smart" default becomes "همان ترتیب من"', state.settings.orderMode);
+  ok(migratePrefs({ settingsVersion: PREFS_VERSION }) === false, 'current prefs are left alone');
+  ok(migratePrefs(null) === false, 'a missing prefs blob is safe');
+  ok(migratePrefs({}) === false || state.settings.orderMode === 'intake', 'an empty blob does not throw');
+
+  // a user who *deliberately* chose smart keeps it (their prefs are already v2)
+  state.settings.orderMode = 'smart';
+  migratePrefs({ settingsVersion: PREFS_VERSION, settings: { orderMode: 'smart' } });
+  ok(state.settings.orderMode === 'smart', 'a deliberate choice on the current version survives');
+  state.settings.orderMode = 'intake';
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} feature checks passed`);

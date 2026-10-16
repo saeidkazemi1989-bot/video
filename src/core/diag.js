@@ -22,6 +22,44 @@ export function recordError(error, where = '') {
 }
 export const lastErrors = () => errors.slice();
 
+const renders = [];
+const saves = [];
+
+/** Remembers how the last export went (frames, wall time, effective fps). */
+export function recordRender(stats = {}) {
+  const frames = Number(stats.frames) || 0;
+  const seconds = Math.round((Number(stats.ms) || 0) / 100) / 10;
+  const entry = {
+    frames,
+    seconds,
+    fps: Math.round(((stats.fps || (seconds > 0 ? frames / seconds : 0)) || 0) * 10) / 10 || null,
+    quality: stats.quality || '',
+    renderer: stats.renderer || '',
+    at: Date.now(),
+  };
+  renders.push(entry);
+  if (renders.length > 3) renders.shift();
+  return entry;
+}
+export const lastRenders = () => renders.slice();
+
+/** Remembers where the last file went (so a report proves whether saving worked). */
+export function recordSave(result = {}) {
+  const entry = {
+    ok: !!result.ok,
+    method: result.method || '',
+    path: result.path || '',
+    display: result.display || '',
+    bytes: Number(result.bytes) || 0,
+    error: result.error || '',
+    at: Date.now(),
+  };
+  saves.push(entry);
+  if (saves.length > 3) saves.shift();
+  return entry;
+}
+export const lastSaves = () => saves.slice();
+
 /* ------------------------------------------------------------------ */
 /* capability probes                                                   */
 /* ------------------------------------------------------------------ */
@@ -59,13 +97,29 @@ export async function probeEncoder(win, size = { width: 1080, height: 1920 }, fp
   const VF = win?.VideoFrame;
   if (typeof VE === 'undefined' || typeof VF === 'undefined') return { supported: false, reason: 'no-webcodecs' };
   const codecs = ['avc1.640028', 'avc1.4d0028', 'avc1.42E032', 'avc1.42E028'];
-  for (const codec of codecs) {
-    try {
-      const res = await VE.isConfigSupported({ codec, width: size.width, height: size.height, framerate: fps, bitrate: 8_000_000, avc: { format: 'avc' } });
-      if (res?.supported) return { supported: true, codec };
-    } catch { /* next */ }
+  const modes = [['hardware', { hardwareAcceleration: 'prefer-hardware' }], ['default', {}]];
+  for (const [mode, extra] of modes) {
+    for (const codec of codecs) {
+      try {
+        const res = await VE.isConfigSupported({ codec, width: size.width, height: size.height, framerate: fps, bitrate: 8_000_000, avc: { format: 'avc' }, ...extra });
+        if (res?.supported) return { supported: true, codec, mode };
+      } catch { /* next */ }
+    }
   }
   return { supported: false, reason: 'no-supported-avc-config' };
+}
+
+/** Real worker state — "the API exists" tells nobody anything. */
+export async function probeServiceWorker(win = globalThis) {
+  const nav = win?.navigator;
+  if (!nav || !('serviceWorker' in nav)) return 'unsupported';
+  try {
+    const regs = (await nav.serviceWorker.getRegistrations?.()) || [];
+    if (!regs.length) return 'not-registered';
+    return nav.serviceWorker.controller ? 'active' : 'registered';
+  } catch {
+    return 'unknown';
+  }
 }
 
 export function probeAudio(win) {
@@ -88,7 +142,7 @@ export async function probeStorage(win) {
 }
 
 /** One-shot snapshot of everything that decides whether rendering can work. */
-export async function deviceReport(win = globalThis, { extra = null } = {}) {
+export async function deviceReport(win = globalThis, { extra = null, context = null } = {}) {
   const nav = win?.navigator || {};
   const scr = win?.screen || {};
   const gl = await probeWebGL(win);
@@ -96,7 +150,7 @@ export async function deviceReport(win = globalThis, { extra = null } = {}) {
   const audio = probeAudio(win);
   const storage = await probeStorage(win);
   const cap = win?.Capacitor;
-  const swReg = (() => { try { return !!nav.serviceWorker; } catch { return false; } })();
+  const workers = await probeServiceWorker(win);
 
   const report = {
     app: `ReelForge ${APP_VERSION}`,
@@ -111,9 +165,11 @@ export async function deviceReport(win = globalThis, { extra = null } = {}) {
     encoder: enc,
     audio,
     faceDetector: typeof win?.FaceDetector !== 'undefined',
-    serviceWorker: swReg,
-    serviceWorkerActive: (() => { try { return !!nav.serviceWorker?.controller; } catch { return false; } })(),
+    serviceWorker: workers,
     storage,
+    context: context || null,
+    renders: lastRenders(),
+    saves: lastSaves(),
     extras: extra,
     errors: lastErrors().slice(-4).map((e) => `${e.where ? `${e.where}: ` : ''}${e.text}`),
     at: new Date().toISOString(),
@@ -136,8 +192,22 @@ export function reportText(report = {}) {
   push('encoder', report.encoder?.supported ? `ok (${report.encoder.codec})` : `unsupported (${report.encoder?.reason || '?'})`);
   push('audio', `OAC=${report.audio?.offlineAudioContext ? 'yes' : 'no'}`);
   push('faceDetector', report.faceDetector ? 'native' : 'skin-blob fallback');
-  push('serviceWorker', `${report.serviceWorker ? 'yes' : 'no'}${report.serviceWorkerActive ? ' (active)' : ''}`);
-  if (report.storage) push('storage', `${report.storage.usageMB}/${report.storage.quotaMB} MB`);
+  push('serviceWorker', report.serviceWorker || 'unknown');
+  if (report.storage) push('storage', `${report.storage.usageMB}/${report.storage.quotaMB} MB (browser space)`);
+  if (report.context) {
+    const c = report.context;
+    push('stage', c.stage);
+    push('assets', c.assets);
+    push('plan', [c.duration ? `duration=${c.duration}s` : '', c.framing ? `framing=${c.framing}` : '',
+      c.order ? `order=${c.order}` : '', c.quality ? `quality=${c.quality}` : '', c.fps ? `fps=${c.fps}` : '',
+      c.preset ? `preset=${c.preset}` : '', c.music ? `music=${c.music}` : ''].filter(Boolean).join(' '));
+  }
+  for (const r of report.renders || []) {
+    push('render', `${r.frames} frames in ${r.seconds}s${r.fps ? ` (${r.fps} fps)` : ''}${r.quality ? ` · ${r.quality}` : ''}${r.renderer ? ` · ${r.renderer}` : ''}`);
+  }
+  for (const sv of report.saves || []) {
+    push('save', sv.ok ? `ok · ${sv.method} · ${sv.display || sv.path || ''}` : `FAILED (${sv.error})`);
+  }
   push('ua', report.userAgent);
   if (report.extras && Object.keys(report.extras).length) push('extras', JSON.stringify(report.extras));
   if (report.errors?.length) {
@@ -160,9 +230,27 @@ export function reportRows(report = {}) {
     ['GLSL', gl?.ok ? `${gl.glsl}${gl.highpFragment ? ' · highp ✓' : ' · highp ✗'}` : '—'],
     ['کدگذار ویدیو', report.encoder?.supported ? `فعال — ${report.encoder.codec}` : `غیرفعال (${report.encoder?.reason || '؟'})`],
     ['صدا', report.audio?.offlineAudioContext ? 'OfflineAudioContext ✓' : 'محدود'],
-    ['تشخیص چهره', report.faceDetector ? 'موتور نیتیو ✓' : 'الگوریتم داخلی'],
-    ['سرویس‌ورکر', report.serviceWorker ? (report.serviceWorkerActive ? 'فعال' : 'ثبت‌شده') : 'ندارد'],
-    ['حافظهٔ ذخیره', report.storage ? `${report.storage.usageMB} از ${report.storage.quotaMB} مگابایت` : 'نامشخص'],
+    ['تشخیص چهره', report.faceDetector ? 'موتور نیتیو ✓' : 'الگوریتم داخلی (رنگ پوست)'],
+    ['سرویس‌ورکر', ({ active: 'فعال', registered: 'ثبت‌شده', 'not-registered': 'غیرفعال', unsupported: 'پشتیبانی نمی‌شود' })[report.serviceWorker] || 'نامشخص'],
+    ['حافظهٔ ذخیره', report.storage ? `${report.storage.usageMB} از ${report.storage.quotaMB} مگابایت (فضای مرورگر)` : 'نامشخص'],
   ];
+  const c = report.context;
+  if (c) {
+    rows.push(
+      ['مرحله', c.stage || '—'],
+      ['رسانه', c.assets || '—'],
+      ['تنظیمات تدوین', [c.framing === 'fill' ? 'پرکردن قاب' : 'کامل', c.order === 'smart' ? 'ترتیب هوشمند' : 'ترتیب خودم',
+        c.quality || '', c.fps ? `${c.fps} فریم` : '', c.preset || '', c.music || ''].filter(Boolean).join(' · ')],
+    );
+  }
+  if (report.renders?.length) {
+    const r = report.renders.at(-1);
+    rows.push(['آخرین رندر', `${r.frames} فریم در ${r.seconds} ثانیه${r.fps ? ` (${r.fps} فریم/ثانیه)` : ''}${r.renderer ? ` · ${r.renderer}` : ''}`]);
+  }
+  if (report.saves?.length) {
+    const sv = report.saves.at(-1);
+    rows.push(['آخرین ذخیره', sv.ok ? `موفق — ${sv.display || sv.path}` : `ناموفق (${sv.error})`]);
+  }
+  rows.push(['کدگذار', report.encoder?.supported ? `فعال — ${report.encoder.codec}${report.encoder.mode === 'hardware' ? ' (سخت‌افزاری)' : ''}` : 'غیرفعال']);
   return rows.filter(([, v]) => v !== undefined && v !== null && v !== '');
 }
