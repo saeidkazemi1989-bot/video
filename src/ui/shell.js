@@ -118,7 +118,17 @@ export function confirmSheet({ title, message, confirmLabel = 'تأیید', dang
 
 /* ---------------- busy overlay ---------------- */
 const CIRC = 2 * Math.PI * 19;
+const STALL_MS = 60_000;          // no progress for a minute ⇒ offer a way out
 let busyCancel = null;
+let busyStageSub = '';
+let busyLastTick = 0;
+let busyWatchdog = null;
+
+function stallHint() {
+  const sub = $('#busy-sub');
+  if (!state.busy || !sub) return;
+  sub.textContent = `${busyStageSub ? `${busyStageSub} · ` : ''}طول کشید — اگر گیر کرده، «لغو» را بزن و دوباره امتحان کن`;
+}
 
 export function startBusy(title, sub = '', { onCancel = null } = {}) {
   state.busy = true;
@@ -127,23 +137,40 @@ export function startBusy(title, sub = '', { onCancel = null } = {}) {
   $('#busy-sub').textContent = sub;
   $('#busy-pct').textContent = '۰٪';
   $('#busy-ring').style.strokeDashoffset = String(CIRC);
+  busyStageSub = sub;
+  busyLastTick = Date.now();
   const cancel = $('#busy-cancel');
-  cancel.hidden = !onCancel;
+  // always reachable: an overlay the user cannot dismiss is worse than a cancelled job
+  cancel.hidden = false;
   busyCancel = onCancel;
-  cancel.onclick = () => { busyCancel?.(); cancel.hidden = true; };
+  cancel.onclick = () => {
+    if (busyCancel) busyCancel();
+    else { stopBusy(); toast('پردازش رها شد', 'info'); }
+    cancel.hidden = true;
+  };
   node.hidden = false;
+  clearInterval(busyWatchdog);
+  busyWatchdog = setInterval(() => {
+    if (!state.busy || Date.now() - busyLastTick < STALL_MS) return;
+    busyLastTick = Date.now();
+    stallHint();
+  }, 5000);
 }
 export function updateBusy(progress, sub) {
+  busyLastTick = Date.now();
   if (typeof progress === 'number') {
     const p = Math.max(0, Math.min(1, progress));
     $('#busy-ring').style.strokeDashoffset = String(CIRC * (1 - p));
     $('#busy-pct').textContent = `${faNum(Math.round(p * 100))}٪`;
   }
-  if (sub !== undefined) $('#busy-sub').textContent = sub;
+  if (sub !== undefined) { $('#busy-sub').textContent = sub; busyStageSub = sub; }
 }
+export function busyElapsed() { return busyLastTick ? Date.now() - busyLastTick : 0; }
 export function stopBusy() {
   state.busy = false;
   $('#busy').hidden = true;
+  clearInterval(busyWatchdog);
+  busyWatchdog = null;
   busyCancel = null;
 }
 

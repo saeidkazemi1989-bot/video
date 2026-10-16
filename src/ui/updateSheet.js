@@ -9,7 +9,7 @@ import { el, humanSize } from '../core/util.js';
 import { openSheet, btn, toast, chips, setUpdateBadge } from './shell.js';
 import {
   APP_VERSION, faVersion, statusText, updateAction, actionLabel,
-  checkForUpdate, detectWebBuild, platformOf, openExternal,
+  checkForUpdate, detectWebBuild, platformOf, isNative, openExternal,
   LATEST_RELEASE_PAGE, RELEASES_PAGE,
 } from '../core/update.js';
 
@@ -32,13 +32,28 @@ export async function initUpdates() {
 
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
     bootHadController = !!navigator.serviceWorker.controller;
-    try {
-      registration = (await navigator.serviceWorker.getRegistration?.()) || null;
-      if (!registration && import.meta.env?.PROD) {
-        registration = await navigator.serviceWorker.register('./sw.js');
-      }
-      trackRegistration(registration);
-    } catch { /* no SW support (e.g. the native WebView) — native path still works */ }
+    if (isNative()) {
+      // The APK ships its own copy of the shell — a cached one would survive an APK
+      // update and could point at files that no longer exist. Keep native installs
+      // cache-free; their updates arrive through the ⟳ button / a new APK.
+      try {
+        const regs = (await navigator.serviceWorker.getRegistrations?.()) || [];
+        await Promise.all(regs.map((r) => r.unregister?.()));
+        if (typeof caches !== 'undefined') {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+        registration = null;
+      } catch { /* nothing to clean */ }
+    } else {
+      try {
+        registration = (await navigator.serviceWorker.getRegistration?.()) || null;
+        if (!registration && import.meta.env?.PROD) {
+          registration = await navigator.serviceWorker.register('./sw.js');
+        }
+        trackRegistration(registration);
+      } catch { /* no SW support — the update button still checks releases */ }
+    }
 
     // a brand-new worker took over ⇒ the page is running an older build
     try {

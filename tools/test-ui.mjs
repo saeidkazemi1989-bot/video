@@ -5,6 +5,7 @@
  * Run: node tools/test-ui.mjs
  */
 import { parseHTML } from 'linkedom';
+import { readFileSync } from 'node:fs';
 
 /* ---------------- DOM & browser shims ---------------- */
 const { document, window } = parseHTML(`<!doctype html><html lang="fa" dir="rtl"><body>
@@ -151,6 +152,72 @@ function renderStep(step) {
   const node = document.createElement('div');
   SCREENS[step](screen, { rerender: () => renderStep(step) });
   return node;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* the [hidden] contract: every element the app hides with the HTML  */
+/* `hidden` attribute must really be hidden by the stylesheet        */
+/* ---------------------------------------------------------------- */
+console.log('\n▸ CSS: [hidden] contract');
+{
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+
+  const rules = [];
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const decls = m[2].split(';').map((d) => d.trim()).filter(Boolean).map((d) => {
+      const i = d.indexOf(':');
+      return i < 0 ? null : { prop: d.slice(0, i).trim().toLowerCase(), value: d.slice(i + 1).trim(), important: /!important/i.test(d) };
+    }).filter(Boolean);
+    if (!decls.length) continue;
+    for (const sel of m[1].split(',')) rules.push({ selector: sel.trim(), decls });
+  }
+  const lastCompound = (sel) => sel.split(/[\s>+~]+/).filter(Boolean).pop() || '';
+  const specificity = (c) => (c.match(/#[\w-]+/g) || []).length * 100
+    + (c.match(/\.[\w-]+/g) || []).length * 10
+    + (/^[a-z][\w-]*/i.test(c) ? 1 : 0);
+
+  function matches(compound, el) {
+    if (compound.includes('[')) return compound.includes('[hidden]') ? el.hidden : false;
+    const id = (compound.match(/#([\w-]+)/) || [])[1];
+    if (id && id !== el.id) return false;
+    const tag = (compound.match(/^[a-z][\w-]*/i) || [])[0];
+    if (tag && tag.toLowerCase() !== el.tag.toLowerCase()) return false;
+    const classes = (compound.match(/\.[\w-]+/g) || []).map((c) => c.slice(1));
+    return classes.every((c) => el.classes.includes(c));
+  }
+  function displayOf(el) {
+    let best = null;
+    rules.forEach((r, i) => {
+      const compound = lastCompound(r.selector);
+      if (!compound || compound.includes(':') || compound.includes('>')) return;
+      if (!matches(compound, el)) return;
+      const d = r.decls.find((x) => x.prop === 'display');
+      if (!d) return;
+      const weight = (d.important ? 100000 : 0) + specificity(compound) * 1000 + i;
+      if (!best || weight > best.weight) best = { weight, value: d.value.toLowerCase() };
+    });
+    return best?.value || '';
+  }
+
+  const hiddenEls = [...html.matchAll(/<([a-z][\w-]*)([^>]*\shidden(?:\s[^>]*)?)>/gi)].map(([, tag, attrs]) => ({
+    tag, hidden: true,   // they all carry the attribute by construction
+
+    id: (attrs.match(/id="([^"]+)"/) || [])[1] || '',
+    classes: ((attrs.match(/class="([^"]+)"/) || [])[1] || '').split(/\s+/).filter(Boolean),
+  }));
+  ok(hiddenEls.length >= 5, `index.html marks the overlays/buttons hidden (${hiddenEls.length})`);
+  ok(hiddenEls.some((e) => e.id === 'busy'), 'the busy overlay is one of them');
+  ok(hiddenEls.some((e) => e.id === 'sheet-host'), 'so is the sheet host');
+
+  for (const el of hiddenEls) {
+    const display = displayOf(el);
+    ok(display === '' || display.startsWith('none'),
+      `#${el.id || el.tag} stays hidden (computed display: ${display || 'default'})`);
+  }
+  ok(/\[hidden\]\s*\{[^}]*display\s*:\s*none\s*!important/i.test(css),
+    'styles.css ships the global [hidden] guard');
 }
 
 console.log('\n▸ empty state');

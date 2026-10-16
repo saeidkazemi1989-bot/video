@@ -108,6 +108,11 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .grow { flex: 1; }
 .mt-8 { margin-top: 8px; } .mt-16 { margin-top: 16px; } .mt-24 { margin-top: 24px; }
 .center { text-align: center; }
+/* The `hidden` *attribute* must beat our own display rules: the UA style is
+   `[hidden] { display: none }` and any author `display` (e.g. `.busy{display:grid}`)
+   silently overrides it — which used to leave the «در حال پردازش…» overlay on screen
+   from launch. Keep this guard first and enforced. */
+[hidden] { display: none !important; }
 .hidden { display: none !important; }
 
 /* ---------- type ---------- */
