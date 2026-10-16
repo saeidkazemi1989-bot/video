@@ -52,6 +52,7 @@ export function buildCopy({
   lang = 'fa',
   tone = 'auto',
   topic = '',
+  brief = '',
   customCaption = '',
   shots = 8,
   duration = 30,
@@ -59,7 +60,8 @@ export function buildCopy({
   includeHashtags = true,
 } = {}) {
   const rng = mulberry32(seed);
-  const category = detectCategory(topic) || 'general';
+  // the «هدف کلیپ» sentence is the best description of the subject we get
+  const category = detectCategory([topic, brief].filter(Boolean).join(' ')) || 'general';
   const categoryLabel = CATEGORY_LABELS[lang]?.[category] || category;
   const finalTone = tone && tone !== 'auto' ? tone : guessTone(presetId);
   const ctx = { topic: topic.trim(), categoryLabel, count: shots };

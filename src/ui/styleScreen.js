@@ -5,6 +5,7 @@ import { PRESETS, DURATIONS, QUALITIES, ASPECTS, autoPreset } from '../data/styl
 import { go, btn, setBottomBar, chips, seg, switchRow, slider } from './shell.js';
 import { patchSettings, markDirty } from '../project.js';
 import { savePrefs } from '../state.js';
+import { briefCard } from './briefCard.js';
 
 export function renderStyleScreen(root, { rerender } = {}) {
   root.innerHTML = '';
@@ -12,6 +13,10 @@ export function renderStyleScreen(root, { rerender } = {}) {
   root.append(wrap);
 
   const autoPick = autoPreset(state.assets);
+  const rerenderAll = () => (rerender ? rerender() : renderStyleScreen(root, {}));
+
+  // the brief sits above the style list — it is what picks the style
+  wrap.append(briefCard({ rerender: rerenderAll, compact: true }));
 
   wrap.append(el('div', { class: 'card card--pad-lg stack' }, [
     el('h3', { text: 'سبک تدوین' }),

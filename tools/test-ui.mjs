@@ -253,13 +253,67 @@ console.log('\n▸ step 2 styles');
   renderStep(2);
   const cards = screen.querySelectorAll('.preset');
   ok(cards.length >= 10, 'all presets rendered', String(cards.length));
-  const chips = screen.querySelectorAll('.chip');
+  const durationRow = [...screen.querySelectorAll('.field')].find((f) => f.textContent.includes('مدت ریلز'));
+  const chips = durationRow.querySelectorAll('.chip');
   ok(chips.length >= 4, 'duration chips rendered', String(chips.length));
   chips[3].dispatchEvent(new window.Event('click'));
   ok(state.settings.duration === 45, 'duration chip updates state', String(state.settings.duration));
   const presets = screen.querySelectorAll('.preset');
   presets[2].dispatchEvent(new window.Event('click'));
   ok(state.presetId === 'cinematic' || state.presetId.length > 0, 'preset click updates selection', state.presetId);
+}
+
+console.log('\n▸ «هدف کلیپ» brief');
+{
+  state.settings.brief = '';
+  state.briefAnalysis = null;
+  state.presetId = 'auto';
+  state.lastLibrary = null;
+  renderStep(1);
+  const card = screen.querySelector('.brief');
+  ok(card !== null, 'the brief card is on the media step');
+  const ta = card.querySelector('textarea.brief__text');
+  ok(ta !== null, 'it has a text box for the sentence');
+  const examples = card.querySelectorAll('.chip--example');
+  ok(examples.length >= 4, 'one-tap examples are offered', String(examples.length));
+  ok([...card.querySelectorAll('button')].some((b) => b.textContent.includes('هدف را بخوان')), 'the read button exists');
+
+  // tapping an example fills the box and runs the analysis
+  examples[0].dispatchEvent(new window.Event('click'));
+  ok(state.settings.brief.length > 20, 'the example fills the sentence', state.settings.brief.slice(0, 24));
+  ok(state.presetId !== 'auto', 'the style is chosen from the sentence', state.presetId);
+  ok(!!state.settings.topic, 'the on-screen topic is filled from the sentence', state.settings.topic);
+  ok(['curious', 'bold', 'warm', 'funny', 'aesthetic'].includes(state.settings.tone), 'a real tone is set', state.settings.tone);
+  ok(state.lastLibrary?.genre, 'the music genre is chosen for the library', JSON.stringify(state.lastLibrary));
+  ok(state.settings.briefPlan?.intent && state.settings.briefPlan?.at > 0, 'the decision is stored for the report');
+  const rows = [...screen.querySelectorAll('.kv__row')].map((r) => r.textContent);
+  ok(rows.length >= 6, 'the card explains what it decided', String(rows.length));
+  ok(rows.some((r) => r.includes('سبک')), 'including the style it picked');
+  ok(rows.some((r) => r.includes('موسیقی')), 'and the music');
+
+  // a calm brief on the style step picks a calm style instead
+  state.settings.brief = '';
+  state.briefAnalysis = null;
+  renderStep(2);
+  const card2 = screen.querySelector('.brief');
+  ok(card2 !== null, 'the brief is also reachable from the style step');
+  const ta2 = card2.querySelector('textarea.brief__text');
+  ta2.value = 'ادیت آرام و هنری از غروب شهر با حس غمگین';
+  ta2.dispatchEvent(new window.Event('input'));
+  [...card2.querySelectorAll('button')].find((b) => b.textContent.includes('هدف را بخوان')).dispatchEvent(new window.Event('click'));
+  ok(state.presetId === 'cinematic', 'a calm artistic brief → the cinematic style', state.presetId);
+  ok(state.settings.framing === 'fit', 'and it does not silently switch to cropping the frame');
+  ok(state.settings.orderMode === 'intake', 'the brief never reorders the media');
+
+  // an empty brief must be refused instead of guessing
+  state.settings.brief = '';
+  state.briefAnalysis = null;
+  const before = state.presetId;
+  renderStep(1);
+  const card3 = screen.querySelector('.brief');
+  [...card3.querySelectorAll('button')].find((b) => b.textContent.includes('هدف را بخوان')).dispatchEvent(new window.Event('click'));
+  ok(state.presetId === before, 'an empty brief changes nothing', state.presetId);
+  ok(state.briefAnalysis === null || state.briefAnalysis === undefined, 'and stores no analysis');
 }
 
 console.log('\n▸ plan + step 3 text');

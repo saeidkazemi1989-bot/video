@@ -36,6 +36,8 @@ export const DEFAULT_SETTINGS = {
   subtitleStyle: 'plain',
   autoUpdateCheck: true,   // silently look for a newer build on start-up
   updateUrl: '',           // optional self-hosted update manifest ({version, apk})
+  brief: '',               // «هدف کلیپ» — one sentence about what the clip is for
+  briefPlan: null,         // what analyzeBrief() decided from it (for the UI + report)
 };
 
 function evenDistribute(total, parts, minEach, maxEach) {
@@ -107,7 +109,9 @@ export function buildPlan({
   // ---------------- shot count ----------------
   const minBeats = Math.max(1, Math.round(preset.minShot / beatPeriod));
   const maxBeats = Math.max(minBeats + 1, Math.round(preset.maxShot / beatPeriod));
-  const desiredShotSec = clamp(2.7 / preset.pace, preset.minShot * 0.95, preset.maxShot);
+  // `pace` is a shot-LENGTH multiplier: cinematic (1.45) breathes, sport (0.55) snaps.
+  // It used to be divided, which made every "fast" style cut slower than «سینمایی».
+  const desiredShotSec = clamp(2.7 * preset.pace, preset.minShot * 0.95, preset.maxShot);
   let shots = Math.max(3, Math.round(totalBeats / Math.max(1, Math.round(desiredShotSec / beatPeriod))));
   const capacity = Math.max(3, Math.floor(duration / (preset.minShot * 0.92)));
   shots = clamp(Math.max(shots, Math.min(usable.length, capacity)), 3, 60);
@@ -251,6 +255,7 @@ export function buildPlan({
     lang: S.lang,
     tone: S.tone,
     topic: S.topic,
+    brief: S.brief,
     customCaption: S.customCaption,
     shots: cuts.length,
     duration,

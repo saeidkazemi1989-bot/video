@@ -297,8 +297,10 @@ export function reportText(report = {}) {
   if (report.storage) push('storage', `${report.storage.usageMB}/${report.storage.quotaMB} MB (browser space)`);
   if (report.context) {
     const c = report.context;
+    if (c.brief) rows.push(['هدف کلیپ', c.brief]);
     push('stage', c.stage);
     push('assets', c.assets);
+    if (c.brief) push('brief', c.brief);
     push('plan', [c.duration ? `duration=${c.duration}s` : '', c.framing ? `framing=${c.framing}` : '',
       c.order ? `order=${c.order}` : '', c.quality ? `quality=${c.quality}` : '', c.fps ? `fps=${c.fps}` : '',
       c.preset ? `preset=${c.preset}` : '', c.music ? `music=${c.music}` : ''].filter(Boolean).join(' '));

@@ -3,8 +3,44 @@ import { state, notify } from './state.js';
 import { buildPlan } from './core/planner.js';
 import { buildOverlays as buildOverlaysShared, attachSubtitles as attachSubtitlesShared } from './core/overlays.js';
 import { autoPreset, getPreset } from './data/styles.js';
+import { analyzeBrief, briefPatch, briefSummary, briefLine } from './core/brief.js';
 
 export function markDirty() { state.planDirty = true; }
+
+/**
+ * «هدف کلیپ» → the whole edit.
+ *
+ * Reads the user's sentence and applies what it implies: style preset, text tone,
+ * duration, subtitle/framing switches and — unless the user brought their own song
+ * — the music genre and tempo for the in-app generator. The media order is never
+ * touched (the user picks that), and nothing is regenerated mid-flight.
+ */
+export function applyBrief(text = state.settings.brief, { rerender = false, keepMusic = null } = {}) {
+  const analysis = analyzeBrief(text, { lang: state.settings.lang || 'fa' });
+  if (!analysis.ok) return { ok: false, reason: analysis.reason, analysis };
+  const ownMusic = keepMusic === null ? !!(state.music && !state.music.generated) : !!keepMusic;
+  const patch = briefPatch(analysis, { keepMusic: ownMusic });
+  state.presetId = patch.presetId;
+  patchSettings({ ...patch.settings, briefPlan: { ...patch.settings.briefPlan, at: Date.now() } });
+  if (patch.music) state.lastLibrary = { ...(state.lastLibrary || {}), genre: patch.music.genre, tempo: patch.music.tempo };
+  state.briefAnalysis = analysis;
+  markDirty();
+  return { ok: true, analysis, patch, keptMusic: ownMusic, rows: briefSummary(analysis) };
+}
+
+/** The brief analysis for the current sentence (recomputed on demand, never stale). */
+export function currentBrief() {
+  const text = state.settings.brief || '';
+  if (!text.trim()) return null;
+  if (state.briefAnalysis?.text === text.trim()) return state.briefAnalysis;
+  state.briefAnalysis = analyzeBrief(text, { lang: state.settings.lang || 'fa' });
+  return state.briefAnalysis;
+}
+
+export function briefReport() {
+  const a = currentBrief();
+  return a?.ok ? briefLine(a) : 'بدون هدف';
+}
 
 export function ensurePlan({ force = false, reseed = false } = {}) {
   if (reseed) state.seed = Math.floor(Math.random() * 99999);

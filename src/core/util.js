@@ -50,6 +50,19 @@ export const uid = (p = 'id') => `${p}_${Date.now().toString(36)}${Math.random()
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
 
+/**
+ * Normalise Persian/Arabic text for matching and display: drops harakat and
+ * tatweel and unifies the Arabic yeh/kaf with their Persian forms, so a brief
+ * typed either way hits the same keywords. ZWNJ (نیم‌فاصله) is preserved —
+ * `brief.js` treats it as optional while matching.
+ */
+export function stripDiacritics(input = '') {
+  return String(input)
+    .replace(/[\u064b-\u065f\u0670\u0640]/g, '')
+    .replace(/[\u064a\u0649]/g, '\u06cc')
+    .replace(/\u0643/g, '\u06a9');
+}
+
 export function fmtTime(sec) {
   sec = Math.max(0, sec || 0);
   const m = Math.floor(sec / 60);

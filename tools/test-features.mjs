@@ -12,12 +12,16 @@ import * as Edit from '../src/core/editPlan.js';
 import { buildPlan, DEFAULT_SETTINGS } from '../src/core/planner.js';
 import { attachSubtitles } from '../src/core/overlays.js';
 import { drawSubtitles, SUBTITLE_STYLES } from '../src/core/text.js';
+import { buildCopy } from '../src/core/captions.js';
 import * as Upd from '../src/core/update.js';
 import * as Diag from '../src/core/diag.js';
 import { coverRect, containRect, pillowBars, FRAMINGS } from '../src/core/framing.js';
 import * as Save from '../src/core/save.js';
 import { state, migratePrefs, PREFS_VERSION } from '../src/state.js';
 import { buildSoundtrack, musicLoop } from '../src/core/audio.js';
+import * as Brief from '../src/core/brief.js';
+import { PRESETS as STYLE_PRESETS, DURATIONS as STYLE_DURATIONS } from '../src/data/styles.js';
+import { TONES as COPY_TONES } from '../src/data/hooks.js';
 
 let failures = 0, checks = 0;
 function ok(cond, label, extra = '') {
@@ -1200,6 +1204,160 @@ section('music bed loops instead of falling silent');
   // a start offset inside the track is clamped into the loop window, never past it
   const offset = await buildSoundtrack({ musicBuffer: ramp, musicStart: 99, cuts: [{ t0: 0, t1: 3, dur: 3, asset: { kind: 'image' } }], bpm: 120, fadeIn: 0, fadeOut: 0 });
   ok(rms(offset.channels[0], 0, 3 * sr) > 0, 'a musicStart past the end still produces music instead of silence');
+}
+
+
+/* ================================================================== */
+section('«هدف کلیپ» — one sentence decides the edit');
+
+{
+  const P = STYLE_PRESETS.map((x) => x.id);
+  const D = STYLE_DURATIONS.map((x) => x.id);
+  const G = Mod.GENRES.map((x) => x.id);
+  const T = COPY_TONES.map((x) => x.id);
+
+  ok(typeof Brief.analyzeBrief === 'function' && typeof Brief.briefPatch === 'function', 'the brief engine is exported');
+  ok(Brief.BRIEF_EXAMPLES.length >= 6, 'one-tap examples exist', String(Brief.BRIEF_EXAMPLES.length));
+  ok(Brief.BRIEF_EXAMPLES.every((e) => e.icon && e.label && e.text.length > 15), 'every example is usable as a brief');
+
+  // ---- nothing / nonsense ----
+  const empty = Brief.analyzeBrief('   ');
+  ok(empty.ok === false && empty.reason === 'empty', 'an empty brief is refused, not guessed');
+  ok(Brief.briefPatch(empty) === null, 'and produces no patch');
+  ok(Brief.briefSummary(empty).length === 0, 'and no summary rows');
+  ok(Brief.analyzeBrief('ا').ok === false, 'a single letter is not a brief');
+  const vague = Brief.analyzeBrief('یه چیزی از اینا بساز');
+  ok(vague.ok === true, 'a vague sentence still gets a default edit', JSON.stringify(vague.intentLabel));
+  ok(vague.presetId === 'auto' || P.includes(vague.presetId), 'the fallback style is a real preset', vague.presetId);
+  ok(Brief.briefSummary(vague).length >= 6, 'the summary always explains the decision');
+
+  // ---- keyword detection ----
+  ok(Brief.detectIntent('می‌خوام محصولم رو بفروشم، تخفیف گذاشتم').id === 'sell', 'selling is detected');
+  ok(Brief.detectIntent('آموزش سه قدمی آرایش').id === 'teach', 'a tutorial is detected');
+  ok(Brief.detectIntent('جشن تولد پسرم').id === 'celebrate', 'a celebration is detected');
+  ok(Brief.detectIntent('').id === null, 'no text → no intent');
+  ok(Brief.detectEnergy('ریتم تند و پرانرژی') > Brief.detectEnergy('آرام و ملایم و لطیف'), 'energy goes up with hype words');
+  ok(Brief.detectEnergy('') === 0.5, 'neutral text → neutral energy');
+  ok(Brief.detectEnergy('🔥🔥 خیلی پرانرژی!!') > 0.7, 'emojis and bangs add energy');
+
+  const line = Brief.briefTopicLine('می‌خوام کفش ورزشی جدید مغازه‌ام رو معرفی کنم و مخاطب جوون ترغیب بشه بخره');
+  ok(!line.startsWith('می‌خوام') && line.includes('کفش'), 'the on-screen line drops the filler start', line);
+  ok(line.length <= 48, 'the on-screen line stays short enough for a caption', String(line.length));
+  ok(Brief.briefTopicLine('کلیپم رو بساز') === 'کلیپم', 'a trailing «بساز» is dropped too', Brief.briefTopicLine('کلیپم رو بساز'));
+  const kw = Brief.briefKeywords('معرفی کفش ورزشی جدید از مغازه‌ی خودم');
+  ok(kw.includes('کفش') && !kw.includes('از'), 'keywords skip stopwords', kw.join(','));
+  ok(kw.length <= 5, 'keywords are capped');
+
+  // ---- the five briefs we care about ----
+  const cases = [
+    ['می‌خوام کفش ورزشی جدید مغازه‌ام رو معرفی کنم و مخاطب جوون ترغیب بشه بخره', { presetId: 'brand', tone: 'bold', intent: 'sell' }],
+    ['جشن تولد دخترم، لحظه‌های قشنگ و احساسی با آهنگ شاد', { presetId: 'vlog', tone: 'warm', intent: 'celebrate' }],
+    ['آموزش سه قدمی آرایش ساده برای مبتدی‌ها، حتماً زیرنویس داشته باشه', { intent: 'teach', subtitles: true, tone: 'curious', presetId: 'beauty' }],
+    ['کلیپ انگیزشی از تمرین‌های باشگاه، انرژی بالا و ریتم تند', { presetId: 'sport', tone: 'bold', intent: 'motivate' }],
+    ['ادیت هنری از غروب شهر با حس آرام و کمی غمگین', { presetId: 'cinematic', musicGenre: 'ambient', tone: 'aesthetic' }],
+    ['معرفی منو و فضای دنج کافه‌ی جدیدمون', { presetId: 'food', musicGenre: 'lofi' }],
+    ['product launch video for my new sneaker shop, energetic', { presetId: 'brand', intent: 'sell' }],
+  ];
+  for (const [text, want] of cases) {
+    const a = Brief.analyzeBrief(text);
+    const label = text.slice(0, 26);
+    for (const [key, value] of Object.entries(want)) {
+      ok(a[key] === value, `${label}: ${key} = ${value}`, `got ${a[key]}`);
+    }
+  }
+
+  // ---- a patch must be safe to apply ----
+  const a = Brief.analyzeBrief('می‌خوام کفش ورزشی جدید مغازه‌ام رو معرفی کنم و مخاطب جوون ترغیب بشه بخره');
+  const patch = Brief.briefPatch(a);
+  ok(P.includes(patch.presetId), 'the patch sets a real preset id', patch.presetId);
+  ok(D.includes(patch.settings.duration), 'the patch sets a real duration', String(patch.settings.duration));
+  ok(T.includes(patch.settings.tone), 'the patch sets a real tone', patch.settings.tone);
+  ok(patch.settings.topic && patch.settings.topic.length <= 48, 'the patch fills the topic from the sentence');
+  ok(patch.settings.brief === a.text && patch.settings.briefPlan?.intent === 'sell', 'the sentence and its plan are stored');
+  ok(patch.music && G.includes(patch.music.genre), 'the patch picks a real music genre', JSON.stringify(patch.music));
+  ok(patch.music.tempo >= 0.8 && patch.music.tempo <= 1.25, 'the tempo stays inside the library range');
+  ok(patch.settings.orderMode === undefined, 'the brief never touches the media order (the user picks that)');
+  const own = Brief.briefPatch(a, { keepMusic: true });
+  ok(own.music === null, "the user's own song is never replaced by the brief");
+  const defaultKeys = Object.keys(DEFAULT_SETTINGS);
+  const unknown = Object.keys(patch.settings).filter((k) => !defaultKeys.includes(k));
+  ok(unknown.length === 0, 'every setting the brief writes is a real setting', unknown.join(','));
+
+  // ---- and the settings really shape the plan ----
+  {
+    const analysis = Brief.analyzeBrief('کلیپ انگیزشی از تمرین‌های باشگاه، انرژی بالا و ریتم تند');
+    const settings = { ...DEFAULT_SETTINGS, ...Brief.briefPatch(analysis).settings };
+    const assets = [
+      { id: 'a', kind: 'video', use: true, duration: 8, width: 1080, height: 1920, score: 0.9, focus: [0.5, 0.4], frames: [], tone: [0.5, 0.5], motionLevel: 0.6 },
+      { id: 'b', kind: 'photo', use: true, width: 1200, height: 1600, score: 0.8, focus: [0.5, 0.4], tone: [0.5, 0.5], motionLevel: 0 },
+    ];
+    const plan = buildPlan({ assets, presetId: 'sport', music: null, settings, seed: 7 });
+    ok(plan.presetId === analysis.presetId && plan.presetId === 'sport', 'the plan uses the preset the brief chose', plan.presetId);
+    ok(analysis.tone === 'bold' && plan.copy.tone === 'bold', 'the copy engine receives the brief tone', plan.copy.tone);
+    ok(Math.abs(plan.duration - analysis.duration) < 1.2, 'the plan is as long as the brief asked', `${plan.duration} vs ${analysis.duration}`);
+    const avgShot = plan.duration / plan.cuts.length;
+    const calm = Brief.analyzeBrief('ادیت هنری آرام از غروب شهر');
+    const calmSettings = { ...DEFAULT_SETTINGS, ...Brief.briefPatch(calm).settings };
+    const calmPlan = buildPlan({ assets, presetId: 'cinematic', music: null, settings: calmSettings, seed: 7 });
+    const calmAvg = calmPlan.duration / calmPlan.cuts.length;
+    ok(avgShot < 1.8, 'an energetic brief produces fast cuts (≤1.8s a shot)', avgShot.toFixed(2));
+    ok(calmAvg > avgShot * 1.6, 'a calm brief gets visibly slower cuts than an energetic one',
+      `${calmAvg.toFixed(2)} > ${avgShot.toFixed(2)}`);
+  }
+
+  // ---- the brief drives the copy category even when the topic field is empty ----
+  {
+    const brief = 'بهترین پیتزا و کافه‌ی شهرمون رو معرفی می‌کنم';
+    const withBrief = buildCopy({ presetId: 'food', topic: '', brief, seed: 3, shots: 6, duration: 30 });
+    const without = buildCopy({ presetId: 'food', topic: '', seed: 3, shots: 6, duration: 30 });
+    ok(withBrief.category === 'food', 'the copy engine reads the subject from the brief', withBrief.category);
+    ok(without.category === 'general', 'and without it the category is just general', without.category);
+    const brief2 = 'می‌خوام تمرین‌های باشگاهم رو نشون بدم و انگیزه بدم';
+    ok(buildCopy({ presetId: 'sport', topic: '', brief: brief2, seed: 5, shots: 6, duration: 30 }).category === 'fitness',
+      'a gym sentence lands in the fitness category');
+  }
+
+  // ---- the report explains what the brief did ----
+  const lineOut = Brief.briefLine(Brief.analyzeBrief('آموزش آرایش ساده'));
+  ok(lineOut.includes('آموزش') || lineOut.includes('بیوتی'), 'the report line names the goal', lineOut);
+  ok(Brief.briefLine(null) === 'بدون هدف', 'no brief → a clear report value');
+  const rows = Brief.briefSummary(Brief.analyzeBrief('آموزش آرایش ساده'), { faNum: (n) => String(n) });
+  ok(rows.every(([k, v]) => k && v), 'every summary row is filled', JSON.stringify(rows));
+  ok(rows.some(([k]) => k === 'موسیقی') && rows.some(([k]) => k === 'سبک تدوین'), 'the summary covers music and style');
+}
+
+
+/* ================================================================== */
+section('pacing follows the style (fast styles really cut faster)');
+
+{
+  // «pace» is a shot-length multiplier. It used to be divided, which made every
+  // energetic style («ورزشی»، «ویروسی») cut slower than «سینمایی».
+  const assets = [
+    { id: 'a', kind: 'video', use: true, duration: 8, width: 1080, height: 1920, score: 0.9, focus: [0.5, 0.4], frames: [], tone: [0.5, 0.5], motionLevel: 0.6 },
+    { id: 'b', kind: 'photo', use: true, width: 1200, height: 1600, score: 0.8, focus: [0.5, 0.4], tone: [0.5, 0.5], motionLevel: 0 },
+    { id: 'c', kind: 'photo', use: true, width: 1080, height: 1080, score: 0.7, focus: [0.5, 0.5], tone: [0.5, 0.5], motionLevel: 0 },
+  ];
+  const measured = STYLE_PRESETS.map((p) => {
+    const plan = buildPlan({ assets, presetId: p.id, music: null, settings: { ...DEFAULT_SETTINGS, duration: 30 }, seed: 7 });
+    return { id: p.id, pace: p.pace, minShot: p.minShot, maxShot: p.maxShot, avg: plan.duration / plan.cuts.length, plan };
+  });
+  for (const m of measured) {
+    ok(m.avg >= m.minShot * 0.9 && m.avg <= m.maxShot * 1.05, `${m.id}: shots stay inside its own min/max (${m.minShot}–${m.maxShot}s)`, `${m.avg.toFixed(2)}s`);
+  }
+  const fast = measured.filter((m) => m.pace <= 0.7);
+  const slow = measured.filter((m) => m.pace >= 1.2);
+  const worstFast = Math.max(...fast.map((m) => m.avg));
+  const bestSlow = Math.min(...slow.map((m) => m.avg));
+  ok(fast.length >= 2 && slow.length >= 3, 'there are fast and slow styles to compare', `${fast.length}/${slow.length}`);
+  ok(worstFast < bestSlow, 'every energetic style cuts faster than every calm style',
+    `fastest calm ${bestSlow.toFixed(2)}s vs slowest fast ${worstFast.toFixed(2)}s`);
+  const sport = measured.find((m) => m.id === 'sport');
+  const cine = measured.find((m) => m.id === 'cinematic');
+  ok(sport.plan.cuts.length > cine.plan.cuts.length, 'a sport edit has more cuts than a cinematic one in the same reel',
+    `${sport.plan.cuts.length} vs ${cine.plan.cuts.length}`);
+  const auto = measured.find((m) => m.id === 'auto');
+  ok(Math.abs(auto.avg - 3.12) < 0.4, 'the default («هوشمند») pacing is unchanged for existing projects', auto.avg.toFixed(2));
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} feature checks passed`);

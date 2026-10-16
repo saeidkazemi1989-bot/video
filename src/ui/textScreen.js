@@ -45,6 +45,9 @@ export function renderTextScreen(root, { rerender } = {}) {
         onchange: () => regenerate({ topic: state.settings.topic }),
       }),
       el('div', { class: 'muted', text: 'با نوشتن موضوع، متن‌ها و هشتگ‌ها دقیقاً به محتوای تو می‌خورند.' }),
+      state.settings.brief?.trim()
+        ? el('div', { class: 'muted', text: `از «هدف کلیپ» هم استفاده می‌کنم: ${state.settings.brief.slice(0, 60)}${state.settings.brief.length > 60 ? '…' : ''}` })
+        : null,
     ]),
   ]));
 
@@ -187,6 +190,7 @@ export function renderTextScreen(root, { rerender } = {}) {
         lang: plan.copy.lang,
         tone: plan.copy.tone || guessTone(plan.presetId),
         topic: state.settings.topic,
+        brief: state.settings.brief || '',
         category: plan.copy.category,
         presetName: plan.preset.name,
         shots: plan.cuts.length,

@@ -8,6 +8,7 @@ import {
   go, btn, toast, startBusy, updateBusy, stopBusy, openSheet, closeSheet,
   setBottomBar, confirmSheet, setRouter,
 } from './shell.js';
+import { briefCard } from './briefCard.js';
 
 const MOOD_FA = {
   golden: 'گرم و طلایی', night: 'شبانه', mono: 'تکرنگ', vivid: 'پررنگ',
@@ -21,10 +22,14 @@ export function renderMediaScreen(root) {
   const wrap = el('div', { class: 'stack' });
   root.append(wrap);
 
+  const rerenderAll = () => renderMediaScreen(root);
+
   if (!state.assets.length) wrap.append(heroCard());
   else wrap.append(gridCard(), analysisCard());
 
   wrap.append(addCard());
+  // «هدف کلیپ» — the sentence that decides the whole edit
+  wrap.append(briefCard({ rerender: rerenderAll }));
   setBottomBar([
     btn('مرحله بعد: سبک', {
       primary: true,

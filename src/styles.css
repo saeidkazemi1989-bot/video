@@ -312,6 +312,18 @@ html[dir='ltr'] .switch input:checked + i::after { transform: translateX(20px); 
 .steps-mini div { display: flex; gap: 9px; align-items: flex-start; font-size: 13.5px; color: var(--txt-dim); }
 .steps-mini b { color: var(--txt); }
 
+/* ---------- «هدف کلیپ» brief card ---------- */
+.brief { border-color: rgba(255, 95, 162, 0.28); background: linear-gradient(180deg, rgba(255, 95, 162, 0.07), rgba(255, 255, 255, 0.02)); }
+.brief textarea.brief__text { width: 100%; min-height: 62px; resize: vertical; line-height: 1.9; font-size: 14px; }
+.brief__hint { min-height: 16px; font-size: 12.5px; }
+.brief__examples { display: grid; gap: 8px; }
+.brief__result { padding: 12px; border-radius: 14px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line); }
+.kv { display: grid; gap: 6px; }
+.kv__row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 13px; }
+.kv__k { color: var(--txt-dim); flex: 0 0 auto; }
+.kv__v { text-align: end; font-weight: 600; }
+.brief--compact .brief__examples .chips button:nth-child(n + 5) { display: none; }
+
 /* ---------- misc ---------- */
 .wave { display: flex; align-items: flex-end; gap: 2px; height: 46px; }
 .wave i { flex: 1; background: var(--grad); border-radius: 2px; opacity: 0.85; }

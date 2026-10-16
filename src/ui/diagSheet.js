@@ -1,6 +1,7 @@
 /** «وضعیت دستگاه» sheet — capability report the user can copy and send. */
 import { el, faNum, copyText } from '../core/util.js';
 import { state } from '../state.js';
+import { briefReport } from '../project.js';
 import { openSheet, btn, toast } from './shell.js';
 import { deviceReport, reportText, reportRows, lastErrors } from '../core/diag.js';
 
@@ -19,6 +20,7 @@ export function appContext() {
     preset: state.presetId,
     music: state.music ? (state.music.generated ? `ساخت اپ (${state.music.name || ''})` : state.music.name || 'فایل خودم') : 'بدون موسیقی',
     subtitles: state.settings.subtitles ? 'روشن' : 'خاموش',
+    brief: briefReport(),
   };
 }
 

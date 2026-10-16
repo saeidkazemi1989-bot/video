@@ -24,15 +24,17 @@ Return JSON only with exactly these keys:
 {"hook":"short scroll-stopping first line (max 7 words)","lines":["3-5 short on-screen phrases (max 4 words each)"],"caption":["2-4 caption lines"],"cta":"one short call to action","tags":["20-24 relevant hashtags, mix of English and local language"]}`,
 };
 
-export async function aiGenerateCopy({ lang = 'fa', tone = 'curious', topic = '', category = 'general', presetName = '', shots = 8, duration = 30 } = {}) {
+export async function aiGenerateCopy({ lang = 'fa', tone = 'curious', topic = '', brief = '', category = 'general', presetName = '', shots = 8, duration = 30 } = {}) {
   if (!aiEnabled()) return null;
   const userPrompt = lang === 'fa'
     ? `موضوع/توضیح کاربر: ${topic || 'ندارد'}
+هدف کلیپ (به قلم کاربر): ${brief || 'ندارد'}
 دسته‌بندی: ${category}
 لحن: ${tone}
 سبک تدوین: ${presetName}
 تعداد نما: ${shots} — مدت ریلز: ${duration} ثانیه`
     : `User topic: ${topic || 'none'}
+Clip goal (the user's own words): ${brief || 'none'}
 Category: ${category}
 Tone: ${tone}
 Edit style: ${presetName}
