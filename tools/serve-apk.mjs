@@ -15,6 +15,14 @@ import { stat, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { join, basename, resolve, extname } from 'node:path';
 
+/** Newest version first, so the page's main button is never the stale build. */
+function byVersionDesc(a, b) {
+  const key = (n) => (n.match(/-(\d+)\.(\d+)\.(\d+)-/) || []).slice(1).map(Number);
+  const [A, B] = [key(a), key(b)];
+  const cmp = (A[0] ?? 0) - (B[0] ?? 0) || (A[1] ?? 0) - (B[1] ?? 0) || (A[2] ?? 0) - (B[2] ?? 0);
+  return cmp !== 0 ? -cmp : b.localeCompare(a);
+}
+
 const dir = resolve(process.argv[2] || new URL('../../downloads', import.meta.url).pathname);
 const port = Number(process.argv[3] || process.env.PORT || 8090);
 
@@ -50,7 +58,10 @@ const html = (files) => `<!doctype html>
   <h1>ریل‌فورج 🎬</h1>
   <p>نسخهٔ اندروید (APK تستی). فایل را روی گوشی نصب کن — برای iOS به macOS و Xcode نیاز است.</p>
   ${files.length
-    ? files.map((f) => `<a class="btn" href="/${encodeURIComponent(f.name)}" download>⬇️ دانلود ${f.name} (${(f.size / 1048576).toFixed(1)} مگابایت)</a>`).join('\n  ')
+    ? `<a class="btn" href="/${encodeURIComponent(files[0].name)}" download>⬇️ دانلود ${files[0].name} (${(files[0].size / 1048576).toFixed(1)} مگابایت) — نسخهٔ جدید</a>`
+      + (files.length > 1
+        ? `<small>نسخه‌های قدیمی‌تر (فقط برای مقایسه): ${files.slice(1).map((f) => `<a href="/${encodeURIComponent(f.name)}" download>${f.name}</a>`).join(' · ')}</small>`
+        : '')
     : '<p>فایلی برای دانلود پیدا نشد.</p>'}
   <button class="refresh" onclick="location.reload()">🔄 بروزرسانی فهرست</button>
   <ol>
@@ -66,7 +77,7 @@ const server = createServer(async (req, res) => {
   if (path === '/' || path === '/index.html') {
     let entries = [];
     try {
-      const names = (await readdir(dir)).filter((n) => extname(n).toLowerCase() === '.apk').sort();
+      const names = (await readdir(dir)).filter((n) => extname(n).toLowerCase() === '.apk').sort(byVersionDesc);
       entries = await Promise.all(names.map(async (name) => ({ name, size: (await stat(join(dir, name))).size })));
     } catch { /* folder missing → empty list */ }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
