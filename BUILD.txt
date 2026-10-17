@@ -1,0 +1,6 @@
+ریل‌فورج — آخرین APK ساخته‌شده
+ref:    v1.3.7
+commit: 3b52a75ebf426fc17f71ba52fdd1534bea990eb5
+file:   reelforge-latest.apk
+size:   7524540 bytes
+built:  2026-10-17T10:17:52Z
