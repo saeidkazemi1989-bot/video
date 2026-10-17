@@ -1036,8 +1036,8 @@ section('compositor orientation (the «۱۸۰ درجه» bug)');
   // ---- the three changes that keep the GL path upright ----
   ok(/-aPos\.y/.test(VERT_SRC), 'the vertex shader flips y so uv is top-down (0,0 = top-left)');
   ok(!/vUv = aPos \* 0\.5 \+ 0\.5/.test(VERT_SRC), 'the old y-up uv mapping is gone');
-  ok(/gl\.pixelStorei\(gl\.UNPACK_FLIP_Y_WEBGL,\s*true\)/.test(glSource),
-    'DOM sources are uploaded flipped (t=0 = top row) — without this every frame is mirrored');
+  ok(/gl\.pixelStorei\(gl\.UNPACK_FLIP_Y_WEBGL,\s*false\)/.test(glSource),
+    'sources are uploaded unflipped (t=0 = top row) — the shader owns orientation, not the driver');
   ok(/uCoverCenter/.test(FRAG_SRC) && /p \/ uCoverScale \+ uCoverCenter/.test(FRAG_SRC),
     'the crop window is anchored by its centre, not its top-left');
   ok(/uniform2f\(U\.uCoverCenter,\s*ox \+ visW \/ 2,\s*oy \+ visH \/ 2\)/.test(glSource),
@@ -1397,19 +1397,33 @@ section('videos and photos share one texture path (the «ویدیو برعکس �
 
   // ---- the renderer can be corrected from the outside ----
   const src = readFileSync(new URL('../src/core/gl.js', import.meta.url), 'utf8');
-  ok(/uniform float uFlipY/.test(src), 'the shader has its own vertical flip');
-  ok(/mix\(uv\.y, 1\.0 - uv\.y, uFlipY\)/.test(src), 'mapUv applies it to the sampled uv');
-  ok(/mix\(uv\.y, 1\.0 - uv\.y, uFlipY\)/.test(src.slice(src.indexOf('fetchPrev'))), 'and so does the previous-shot lookup');
-  ok(/setFlipY\(v\)\s*\{\s*flipYValue/.test(src), 'the renderer exposes setFlipY for a live correction');
-  ok(/gl\.uniform1f\(U\.uFlipY, flipYValue\)/.test(src), 'and uploads it every frame');
-  ok(/isVideoSource\(source\)\s*\n?\s*\? \(drawSourceToScratch/.test(src), 'the texture upload routes video sources through the canvas');
-  ok(/gl\.pixelStorei\(gl\.UNPACK_FLIP_Y_WEBGL, true\)/.test(src.slice(src.indexOf('function upload'))),
-    'and re-asserts the flip flag per upload (it is global context state)');
+  ok(/uniform float uFlipX/.test(src) && /uniform float uFlipY/.test(src),
+    'the shader owns both axes, so a 180° rotation is correctable too');
+  ok(/mix\(uv\.x, 1\.0 - uv\.x, uFlipX\)/.test(src) && /mix\(uv\.y, 1\.0 - uv\.y, uFlipY\)/.test(src),
+    'mapUv applies them to the sampled uv');
+  ok(!/uFlipY/.test(src.slice(src.indexOf('vec3 fetchPrev'), src.indexOf('vec3 grade'))),
+    'the previous-shot lookup is NOT flipped again (it is our own output canvas)');
+  ok(/setFlip\(x, y\)\s*\{/.test(src) && /setFlipY\(v\)\s*\{\s*flipYValue/.test(src),
+    'the renderer exposes setFlip for a live correction');
+  ok(/gl\.uniform1f\(U\.uFlipX, flipXValue\)/.test(src) && /gl\.uniform1f\(U\.uFlipY, flipYValue\)/.test(src),
+    'and uploads both every frame');
+  ok(/isVideoSource\(source\)\) \{\s*\n\s*src = drawSourceToScratch/.test(src),
+    'the texture upload routes video sources through the canvas');
+  ok(/if \(!src\) return false;/.test(src),
+    'a video frame that is not decoded skips the upload instead of sending the raw <video>');
+  ok(/gl\.pixelStorei\(gl\.UNPACK_FLIP_Y_WEBGL, false\)/.test(src),
+    'and the driver flip flag is forced OFF — no driver gets a say any more');
+  ok(!/UNPACK_FLIP_Y_WEBGL, true/.test(src), 'nothing in the compositor ever turns it back on');
 
   // ---- what a read-back means ----
   ok(Orient.decideFlipY({ ok: true }) === 0, 'an upright render needs no correction');
   ok(Orient.decideFlipY({ ok: false, flippedY: true }) === 1, 'a vertically mirrored render is corrected by flipping v');
-  ok(Orient.decideFlipY({ ok: false, rotated180: true }) === -1, 'a true 180° rotation is reported, not "fixed" with a v-flip');
+  ok(Orient.decideFlipY({ ok: false, rotated180: true }) === -1, 'decideFlipY still reports a 180° as unfixable on the v axis');
+  ok(JSON.stringify(Orient.decideFlip({ ok: false, rotated180: true })) === JSON.stringify({ flipX: 1, flipY: 1 }),
+    'but decideFlip corrects a 180° by flipping both axes');
+  ok(JSON.stringify(Orient.decideFlip({ ok: false, mirroredX: true })) === JSON.stringify({ flipX: 1, flipY: 0 }),
+    'and a horizontal mirror by flipping x');
+  ok(Orient.decideFlip({ ok: false, blank: true }) === null, 'an unreadable frame still keeps the previous answer');
   ok(Orient.decideFlipY({ ok: false, mirroredX: true }) === -1, 'a horizontal mirror is reported too');
   ok(Orient.decideFlipY({ ok: false, blank: true }) === null, 'an unreadable frame keeps the previous answer');
   ok(Orient.decideFlipY(null) === null, 'no probe result keeps the previous answer');
@@ -1424,6 +1438,7 @@ section('videos and photos share one texture path (the «ویدیو برعکس �
   };
   const fix = await Orient.ensureOrientationFix({ probe: probeFlippedThenOk, cached: null, force: true, win: {}, doc: {}, now: () => 1234 });
   ok(fix.flipY === 1 && fix.status === 'fixed', 'a mirrored read-back switches the shader flip on', JSON.stringify(fix));
+  ok(fix.algo === Orient.ORIENTATION_ALGO, 'the answer records which pipeline measured it', String(fix.algo));
   ok(fix.confirmed === true, 'and the corrected value is verified by a second render');
   ok(calls[0].flipY === 0 && calls[1].flipY === 1, 'the probe is asked twice, with and without the flip', JSON.stringify(calls.map((c) => c.flipY)));
   ok(calls.length === 3 && calls[2].via === 'video', 'the video path is measured as well', JSON.stringify(calls[2]));
@@ -1444,12 +1459,32 @@ section('videos and photos share one texture path (the «ویدیو برعکس �
   ok(/بررسی نشد/.test(Orient.orientationReport(dead)), 'and the report says it could not be measured', Orient.orientationReport(dead));
 
   // a cached answer is reused instead of re-rendering on every launch
-  const cached = { flipY: 1, status: 'fixed', testedAt: 99 };
+  const cached = { flipY: 1, status: 'fixed', testedAt: 99, algo: Orient.ORIENTATION_ALGO };
   let probed = 0;
   const reuse = await Orient.ensureOrientationFix({ probe: async () => { probed++; return { ok: true }; }, cached, win: {}, doc: {} });
   ok(reuse.flipY === 1 && probed === 0, 'a stored measurement is used without probing again');
   const forced = await Orient.ensureOrientationFix({ probe: async () => { probed++; return { ok: true }; }, cached, force: true, win: {}, doc: {} });
   ok(probed > 0 && forced.flipY === 0, 'but «بررسی دوباره» re-measures and corrects it');
+
+  // THE bug behind «هنوز برعکس است»: a value learned by an older build must never
+  // be applied to a pipeline that stores textures differently.
+  let staleProbes = 0;
+  const stale = await Orient.ensureOrientationFix({
+    probe: async () => { staleProbes++; return { ok: true, mode: 'webgl2' }; },
+    cached: { flipY: 1, status: 'fixed', testedAt: 99 },   // no `algo` — measured before v1.3.5
+    win: {}, doc: {},
+  });
+  ok(staleProbes >= 1 && stale.flipY === 0, 'a cache from an older pipeline is re-measured, not trusted', JSON.stringify({ staleProbes, flipY: stale.flipY }));
+
+  // and a device that really is 180° gets corrected instead of being declared broken
+  const rotated = async (w, d, opts) => (
+    opts.flipX === 1 && opts.flipY === 1
+      ? { ok: true, verdict: 'درست', mode: 'webgl2' }
+      : { ok: false, rotated180: true, verdict: '۱۸۰ درجه چرخیده', mode: 'webgl2' }
+  );
+  const r180 = await Orient.ensureOrientationFix({ probe: rotated, force: true, win: {}, doc: {}, now: () => 7 });
+  ok(r180.flipX === 1 && r180.flipY === 1 && r180.status === 'fixed', 'a 180° device is fixed by flipping both axes', JSON.stringify(r180));
+  ok(Orient.currentOrientationFlipX() === 1, 'and the renderer gets the horizontal half too');
 
   // unreachable probe (no document) must not throw
   const noDoc = await Orient.ensureOrientationFix({ probe: async () => ({ ok: false, reason: 'no-document' }), force: true, win: {}, doc: undefined });
@@ -1457,6 +1492,38 @@ section('videos and photos share one texture path (the «ویدیو برعکس �
   Orient.resetOrientationFix();
 }
 
+
+/* ================================================================== */
+section('«کپی گزارش» works without a clipboard permission');
+
+{
+  // The phone had no navigator.clipboard and the old opacity:0 textarea could not be
+  // selected, so the button silently did nothing. copyText must always answer — and
+  // never throw — whatever the runtime supports.
+  const { copyText, shareText, textareaSelectAll } = await import('../src/core/util.js');
+  const res = await copyText('سلام');
+  ok(typeof res === 'boolean', 'copyText always answers with true/false, never throws', String(res));
+  ok(res === false, 'in a bare Node runtime there is nothing to copy, so it says so', String(res));
+  ok((await copyText(null)) === false, 'even with no text at all');
+  const shared = await shareText('گزارش');
+  ok(['shared', 'cancelled', 'unsupported'].includes(shared), 'shareText reports a known outcome', shared);
+
+  // selecting inside a textarea must work on WebViews too
+  const selected = [];
+  const ta = { value: 'abc', setSelectionRange: (a, b) => selected.push([a, b]), focus() {} };
+  ok(textareaSelectAll(ta) === true && selected[0][0] === 0 && selected[0][1] === 3,
+    'textareaSelectAll selects the whole value', JSON.stringify(selected));
+  ok(textareaSelectAll(null) === false, 'and tolerates a missing element');
+
+  // the sheet keeps a visible, selectable box — the last-resort copy path
+  const sheet = readFileSync(new URL('../src/ui/diagSheet.js', import.meta.url), 'utf8');
+  ok(/class: 'copybox diag__text'/.test(sheet) && /readonly: true/.test(sheet),
+    'the device sheet shows the report in a real selectable textarea');
+  ok(/copyFallback/.test(sheet) && /textareaSelectAll/.test(sheet),
+    'and selects it when the clipboard refuses');
+  ok(/shareText/.test(sheet) && /📤 ارسال گزارش/.test(sheet),
+    'there is a native share button, so a report can always be sent');
+}
 
 /* ================================================================== */
 section('the video texture path is measured, not assumed');

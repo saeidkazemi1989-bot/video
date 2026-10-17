@@ -176,10 +176,10 @@ function paintQuadrants(ctx, size) {
 }
 
 /** Renders that pattern through the real compositor and reads the corners back. */
-function renderAndClassify({ doc, source, srcSize = 16, flipY = 0, via = 'image' }) {
+function renderAndClassify({ doc, source, srcSize = 16, flipX = 0, flipY = 0, via = 'image' }) {
   const out = doc.createElement('canvas');
   out.width = 64; out.height = 64;
-  const renderer = createGLRenderer(out, { flipY });
+  const renderer = createGLRenderer(out, { flipX, flipY });
   if (!renderer) return { ok: false, reason: 'no-webgl' };
   renderer.resize(64, 64);
   renderer.draw({
@@ -190,7 +190,7 @@ function renderAndClassify({ doc, source, srcSize = 16, flipY = 0, via = 'image'
   return { renderer, out };
 }
 
-function readCorners({ doc, out, renderer, flipY, via }) {
+function readCorners({ doc, out, renderer, flipX, flipY, via }) {
   const grab = doc.createElement('canvas');
   grab.width = 64; grab.height = 64;
   const gctx = grab.getContext('2d');
@@ -203,7 +203,7 @@ function readCorners({ doc, out, renderer, flipY, via }) {
     } catch { return null; }
   };
   const corners = { topLeft: px(10, 10), topRight: px(53, 10), bottomLeft: px(10, 53), bottomRight: px(53, 53) };
-  return { ...classifyQuadrants(corners, renderer.fallback ? '2d' : 'webgl2'), flipY: renderer.flipY, via, corners };
+  return { ...classifyQuadrants(corners, renderer.fallback ? '2d' : 'webgl2'), flipX: renderer.flipX, flipY: renderer.flipY, via, corners };
 }
 
 /**
@@ -214,7 +214,7 @@ function readCorners({ doc, out, renderer, flipY, via }) {
  * @param {'image'|'video'} [opts.via] 'video' routes the pattern through the exact
  *   canvas path a video frame takes (see drawSourceToScratch).
  */
-export async function probeRenderOrientation(win = globalThis, doc = win?.document, { flipY = 0, via = 'image' } = {}) {
+export async function probeRenderOrientation(win = globalThis, doc = win?.document, { flipX = 0, flipY = 0, via = 'image' } = {}) {
   if (!doc?.createElement) return { ok: false, reason: 'no-document' };
   try {
     const SRC = 16;
@@ -229,9 +229,9 @@ export async function probeRenderOrientation(win = globalThis, doc = win?.docume
       const scratch = drawSourceToScratch(src, doc, { w: SRC, h: SRC });
       if (scratch) source = scratch;
     }
-    const { renderer, out, reason } = renderAndClassify({ doc, source, srcSize: SRC, flipY, via });
+    const { renderer, out, reason } = renderAndClassify({ doc, source, srcSize: SRC, flipX, flipY, via });
     if (!renderer) return { ok: false, reason };
-    return readCorners({ doc, out, renderer, flipY, via });
+    return readCorners({ doc, out, renderer, flipX, flipY, via });
   } catch (e) {
     return { ok: false, reason: e?.message || 'probe-failed' };
   }
@@ -244,7 +244,7 @@ export async function probeRenderOrientation(win = globalThis, doc = win?.docume
  * the exact reason photos were upright while videos were «۱۸۰ درجه چرخیده».
  * Best-effort: returns {ok:false, reason} wherever captureStream is unavailable.
  */
-export async function probeVideoOrientation(win = globalThis, doc = win?.document, { flipY = 0, timeoutMs = 1600 } = {}) {
+export async function probeVideoOrientation(win = globalThis, doc = win?.document, { flipX = 0, flipY = 0, timeoutMs = 1600 } = {}) {
   if (!doc?.createElement) return { ok: false, reason: 'no-document' };
   try {
     const SRC = 16;
@@ -275,9 +275,9 @@ export async function probeVideoOrientation(win = globalThis, doc = win?.documen
     if (!gotFrame) return { ok: false, reason: 'no-video-frame' };
 
     const w = video.videoWidth || SRC, h = video.videoHeight || SRC;
-    const { renderer, out, reason } = renderAndClassify({ doc, source: video, srcSize: w, flipY, via: 'raw-video' });
+    const { renderer, out, reason } = renderAndClassify({ doc, source: video, srcSize: w, flipX, flipY, via: 'raw-video' });
     if (!renderer) return { ok: false, reason };
-    const result = readCorners({ doc, out, renderer, flipY, via: 'raw-video' });
+    const result = readCorners({ doc, out, renderer, flipX, flipY, via: 'raw-video' });
     try { video.pause?.(); } catch { /* ignore */ }
     try { video.srcObject = null; stream.getTracks?.().forEach((t) => t.stop?.()); } catch { /* ignore */ }
     return result;
@@ -374,9 +374,6 @@ export function reportText(report = {}) {
   if (report.storage) push('storage', `${report.storage.usageMB}/${report.storage.quotaMB} MB (browser space)`);
   if (report.context) {
     const c = report.context;
-    if (c.brief) rows.push(['هدف کلیپ', c.brief]);
-    if (c.orientation) rows.push(['جهت تصویر (عکس/ویدیو)', c.orientation]);
-    if (c.videoTexture) rows.push(['تکسچر ویدیو', c.videoTexture]);
     push('stage', c.stage);
     push('assets', c.assets);
     if (c.brief) push('brief', c.brief);
@@ -432,6 +429,9 @@ export function reportRows(report = {}) {
       ['تنظیمات تدوین', [c.framing === 'fill' ? 'پرکردن قاب' : 'کامل', c.order === 'smart' ? 'ترتیب هوشمند' : 'ترتیب خودم',
         c.quality || '', c.fps ? `${c.fps} فریم` : '', c.preset || '', c.music || ''].filter(Boolean).join(' · ')],
     );
+    if (c.brief) rows.push(['هدف کلیپ', c.brief]);
+    if (c.orientation) rows.push(['جهت تصویر (عکس/ویدیو)', c.orientation]);
+    if (c.videoTexture) rows.push(['تکسچر ویدیو', c.videoTexture]);
   }
   if (report.renders?.length) {
     const r = report.renders.at(-1);

@@ -112,18 +112,116 @@ export function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+/**
+ * Copies text to the clipboard, whatever this runtime actually supports.
+ *
+ * Inside the Android/iOS app `navigator.clipboard` is often missing (or rejects
+ * without a user gesture) and the old `execCommand` path needs a *visible*
+ * selection, which is why «کپی گزارش» silently did nothing on the phone. Order:
+ *   1. Capacitor Clipboard plugin (native, always allowed);
+ *   2. the async Clipboard API (browser / PWA);
+ *   3. a real, on-screen textarea + execCommand;
+ *   4. `select()` and leave the text selected so the user can long-press → copy.
+ *
+ * @returns {Promise<boolean>} true when the text really reached the clipboard.
+ */
 export async function copyText(text) {
+  const value = String(text ?? '');
+  // 1) native plugin — the only path that works reliably in a WebView
   try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const ta = el('textarea', { value: text, style: { position: 'fixed', opacity: '0' } });
+    const mod = await import('@capacitor/clipboard');
+    const Clipboard = mod?.Clipboard;
+    if (Clipboard?.write) {
+      await Clipboard.write({ string: value });
+      return true;
+    }
+  } catch { /* plugin not bundled (web build / tests) — fall through */ }
+  // 2) browser clipboard
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch { /* not a secure context, or permission denied */ }
+  // 3) execCommand, with the textarea actually laid out (opacity:0 breaks selection)
+  try {
+    const ta = el('textarea', {
+      value,
+      readonly: true,
+      style: {
+        position: 'fixed', top: '0', left: '0', width: '1px', height: '1px',
+        padding: '0', border: '0', outline: 'none', background: 'transparent', color: 'transparent',
+      },
+    });
     document.body.append(ta);
+    ta.focus();
     ta.select();
+    ta.setSelectionRange?.(0, value.length);
     const ok = document.execCommand?.('copy');
     ta.remove();
-    return !!ok;
+    if (ok) return true;
+  } catch { /* ignore */ }
+  // 4) give the user something they can copy by hand
+  try { selectText(value); } catch { /* ignore */ }
+  return false;
+}
+
+/**
+ * Puts `text` in front of the user, already selected, in a real textarea — the
+ * last-resort path when no programmatic clipboard works. Returns the element.
+ */
+export function selectText(value, { doc = globalThis.document } = {}) {
+  if (!doc?.body) return null;
+  const ta = doc.createElement('textarea');
+  ta.value = String(value ?? '');
+  ta.readOnly = true;
+  ta.className = 'copybox';
+  ta.style.cssText = 'width:100%;min-height:160px;direction:ltr;text-align:left';
+  doc.body.append(ta);
+  textareaSelectAll(ta);
+  return ta;
+}
+
+/**
+ * Shares plain text through the OS sheet (Telegram, WhatsApp, Mail…). On the
+ * phone this is the most reliable way to get a bug report out of the app —
+ * no clipboard, no permissions.
+ * @returns {Promise<'shared'|'cancelled'|'unsupported'>}
+ */
+export async function shareText(text, { title = 'گزارش ریل‌فورج', dialogTitle = 'ارسال گزارش' } = {}) {
+  const value = String(text ?? '');
+  try {
+    const mod = await import('@capacitor/share');
+    if (mod?.Share?.share) {
+      await mod.Share.share({ title, text: value, dialogTitle });
+      return 'shared';
+    }
+  } catch (e) {
+    if (/cancel/i.test(String(e?.message || e))) return 'cancelled';
   }
+  try {
+    if (navigator.share) {
+      await navigator.share({ title, text: value });
+      return 'shared';
+    }
+  } catch (e) {
+    if (e?.name === 'AbortError') return 'cancelled';
+  }
+  return 'unsupported';
+}
+
+/** Selects everything inside a textarea (works on Android/iOS WebViews). */
+export function textareaSelectAll(ta) {
+  try {
+    if (!ta) return false;
+    ta.focus?.();
+    if (typeof ta.setSelectionRange === 'function') {
+      ta.setSelectionRange(0, String(ta.value || '').length);
+      return true;
+    }
+    ta.select?.();
+    return true;
+  } catch { return false; }
 }
 
 /** Share files through the OS sheet (on iOS/Android this lists Instagram). */

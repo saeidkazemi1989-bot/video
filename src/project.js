@@ -4,7 +4,7 @@ import { buildPlan } from './core/planner.js';
 import { buildOverlays as buildOverlaysShared, attachSubtitles as attachSubtitlesShared } from './core/overlays.js';
 import { autoPreset, getPreset } from './data/styles.js';
 import { analyzeBrief, briefPatch, briefSummary, briefLine } from './core/brief.js';
-import { ensureOrientationFix, getOrientationFix, setOrientationFix, orientationReport } from './core/orientation.js';
+import { ensureOrientationFix, getOrientationFix, setOrientationFix, orientationReport, ORIENTATION_ALGO } from './core/orientation.js';
 
 export function markDirty() { state.planDirty = true; }
 
@@ -45,13 +45,18 @@ export function currentBrief() {
 export async function checkOrientation({ force = false } = {}) {
   const fix = await ensureOrientationFix({ cached: state.orientationFix, force });
   const manual = state.settings.orientationManual === 'flip';
-  const applied = { ...fix, manual };
+  const applied = { ...fix, manual, algo: ORIENTATION_ALGO };
+  // «برعکس کن» inverts the measured vertical correction — a live escape hatch for
+  // a device we mis-measured, without needing a new build.
   if (manual) applied.flipY = fix.flipY ? 0 : 1;
   state.orientationFix = applied;
   setOrientationFix(applied);
   // live renderers (preview / editor) pick the correction up immediately
   for (const r of state.liveRenderers || []) {
-    try { r.renderer?.setFlipY?.(applied.flipY); } catch { /* a renderer without GL ignores this */ }
+    try {
+      if (r.renderer?.setFlip) r.renderer.setFlip(applied.flipX, applied.flipY);
+      else r.renderer?.setFlipY?.(applied.flipY);
+    } catch { /* a renderer without GL ignores this */ }
   }
   try { await savePrefs(); } catch { /* storage full/blocked — the fix still applies */ }
   notify();

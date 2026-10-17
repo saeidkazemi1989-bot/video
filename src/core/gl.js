@@ -28,7 +28,8 @@ uniform vec2  uRes;          // output resolution (px)
 uniform vec2  uSrcSize;      // source resolution (px)
 uniform float uCoverScale;   // source px -> canvas px
 uniform vec2  uCoverCenter;  // CENTRE of the visible src region (src px, top-down)
-uniform float uFlipY;        // 1 = this device stores the texture bottom-up (see below)
+uniform float uFlipX;        // 1 = mirror the sampled frame horizontally
+uniform float uFlipY;        // 1 = flip the sampled frame vertically
 uniform float uZoom;
 uniform vec2  uPan;          // canvas px
 uniform float uRot;
@@ -85,11 +86,11 @@ vec2 mapUv(vec2 cv, out float inside){
   // own centre — passing the top-left corner here shifts the crop by half a window.
   vec2 srcPx = p / uCoverScale + uCoverCenter;
   vec2 uv = srcPx / uSrcSize;
-  // Some drivers (Android/ANGLE, and *differently* for video vs image sources) do not
-  // honour UNPACK_FLIP_Y_WEBGL, so the stored texture can be either way up. The app
-  // measures which one it is with probeRenderOrientation() and flips here instead of
-  // trusting the driver — that is why a photo could be upright while a video was not.
-  uv.y = mix(uv.y, 1.0 - uv.y, uFlipY);
+  // Orientation lives here, in the shader, and nowhere else: every upload is
+  // UNPACK_FLIP_Y_WEBGL = false (see upload()), so the texture is always top-down
+  // and no driver can disagree with another driver about images vs video frames.
+  // These two flags are measured per device by probeRenderOrientation().
+  uv = vec2(mix(uv.x, 1.0 - uv.x, uFlipX), mix(uv.y, 1.0 - uv.y, uFlipY));
   inside = (uv.x > -0.002 && uv.x < 1.002 && uv.y > -0.002 && uv.y < 1.002) ? 1.0 : 0.0;
   return uv;
 }
@@ -97,9 +98,9 @@ vec2 mapUv(vec2 cv, out float inside){
 // The previous shot is snapshotted *after* compositing, so it lives in output uv space
 // (0..1 of the canvas) — no cover mapping needed, just the parallax offset.
 vec3 fetchPrev(vec2 uv){
-  // the snapshot is a canvas too, so it is stored the same way up as the current frame
-  vec2 fuv = vec2(uv.x, mix(uv.y, 1.0 - uv.y, uFlipY));
-  return texture(uPrev, clamp(fuv, 0.0, 1.0)).rgb;
+  // The snapshot is our own output canvas, uploaded the same way (no driver flip),
+  // so it already lives in output uv space — flipping it here would double-flip it.
+  return texture(uPrev, clamp(uv, 0.0, 1.0)).rgb;
 }
 
 vec3 grade(vec3 col, vec2 uv){
@@ -299,7 +300,7 @@ function compile(gl, type, src) {
   return s;
 }
 
-export function createGLRenderer(canvas, { flipY = 0 } = {}) {
+export function createGLRenderer(canvas, { flipX = 0, flipY = 0 } = {}) {
   const gl = canvas.getContext('webgl2', {
     alpha: false,
     antialias: false,
@@ -329,14 +330,14 @@ export function createGLRenderer(canvas, { flipY = 0 } = {}) {
   }
   gl.useProgram(prog);
 
-  // Image / video / canvas pixels are top-down, GL textures are bottom-up. Flipping
-  // the upload makes texture coordinate 0 the *top* row, which is what every uv in
-  // this shader (and every offset the JS passes) assumes. Without it the frame comes
-  // out mirrored vertically — i.e. «۱۸۰ درجه چرخیده».
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-  // …and this is what every upload actually relies on, because the driver flag above
-  // is applied inconsistently (image sources flip, video frames often do not).
+  // THE driver flag is a trap: Android drivers apply UNPACK_FLIP_Y_WEBGL per source
+  // type (an image upload is flipped, a video frame often is not), which is exactly
+  // how a phone ended up showing photos upright and videos «۱۸۰ درجه چرخیده».
+  // So it is forced off for every upload, and orientation is done in mapUv() instead
+  // (uFlipX/uFlipY). One code path, one answer, on every device.
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   let flipYValue = flipY ? 1 : 0;
+  let flipXValue = flipX ? 1 : 0;
 
   const quad = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -347,7 +348,7 @@ export function createGLRenderer(canvas, { flipY = 0 } = {}) {
 
   const U = {};
   const names = [
-    'uRes', 'uSrcSize', 'uCoverScale', 'uCoverCenter', 'uFlipY', 'uZoom', 'uPan', 'uRot', 'uFocus',
+    'uRes', 'uSrcSize', 'uCoverScale', 'uCoverCenter', 'uFlipX', 'uFlipY', 'uZoom', 'uPan', 'uRot', 'uFocus',
     'uLift', 'uGain', 'uExposure', 'uContrast', 'uSat', 'uVibrance', 'uTemp', 'uTint', 'uGamma',
     'uFade', 'uVignette', 'uGrain', 'uSharpen', 'uChroma', 'uBloom', 'uScan', 'uHue', 'uLetterbox', 'uFraming',
     'uTime', 'uTransType', 'uTrans', 'uTransDir', 'uHasPrev', 'uTex', 'uPrev',
@@ -380,28 +381,38 @@ export function createGLRenderer(canvas, { flipY = 0 } = {}) {
   function upload(textureUnit, texture, source) {
     gl.activeTexture(textureUnit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    // re-assert: this is global context state and every upload depends on it
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    // re-assert on every upload: this is global context state, not per-texture
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     // A <video> is the one source type whose texture layout the driver decides on its
     // own (the decoder hands over a hardware frame). Drawing the frame into a canvas
     // first — the exact path photos and the self-test already use — makes preview and
     // export agree with each other and with the photos. One blit per rendered frame.
-    const src = isVideoSource(source)
-      ? (drawSourceToScratch(source, canvas.ownerDocument) || source)
-      : source;
+    let src = source;
+    if (isVideoSource(source)) {
+      src = drawSourceToScratch(source, canvas.ownerDocument);
+      // No scratch frame means the video has not decoded yet. Uploading the raw
+      // <video> here would bring the driver's per-source-type flip back in, so the
+      // previous texture simply stays on screen for one frame.
+      if (!src) return false;
+    }
     try {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+      return true;
     } catch (e) {
       // some sources (video without a decoded frame) throw; keep the old texture
+      return false;
     }
   }
 
   return {
     gl,
     canvas,
-    /** 1 = this device stores textures bottom-up; measured by probeRenderOrientation. */
+    /** Orientation correction measured by probeRenderOrientation. */
     setFlipY(v) { flipYValue = v ? 1 : 0; },
+    setFlipX(v) { flipXValue = v ? 1 : 0; },
+    setFlip(x, y) { flipXValue = x ? 1 : 0; flipYValue = y ? 1 : 0; },
     get flipY() { return flipYValue; },
+    get flipX() { return flipXValue; },
     resize(w, h) {
       if (canvas.width !== w) canvas.width = w;
       if (canvas.height !== h) canvas.height = h;
@@ -441,12 +452,13 @@ export function createGLRenderer(canvas, { flipY = 0 } = {}) {
       ox = ox * 0.35 + wantX * 0.65;
       oy = oy * 0.35 + wantY * 0.65;
 
-      upload(gl.TEXTURE0, texCurrent, source);
+      const uploaded = upload(gl.TEXTURE0, texCurrent, source);
 
       gl.uniform2f(U.uRes, w, h);
       gl.uniform2f(U.uSrcSize, srcWidth, srcHeight);
       gl.uniform1f(U.uCoverScale, scale);
       gl.uniform2f(U.uCoverCenter, ox + visW / 2, oy + visH / 2);
+      gl.uniform1f(U.uFlipX, flipXValue);
       gl.uniform1f(U.uFlipY, flipYValue);
       gl.uniform1f(U.uZoom, zoom);
       gl.uniform2f(U.uPan, pan[0], pan[1]);
@@ -481,7 +493,7 @@ export function createGLRenderer(canvas, { flipY = 0 } = {}) {
       gl.uniform1f(U.uHasPrev, tr && hasPrev ? 1 : 0);
 
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      return true;
+      return uploaded !== false;
     },
   };
 }

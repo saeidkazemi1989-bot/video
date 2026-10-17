@@ -4,7 +4,7 @@
  * overlays on top. Used for both live preview and the final export.
  */
 import { createGLRenderer, create2DRenderer } from './gl.js';
-import { currentOrientationFlip } from './orientation.js';
+import { currentOrientationFlip, currentOrientationFlipX } from './orientation.js';
 import { drawOverlays, ensureFonts } from './text.js';
 import { decodeImage, makeVideoElement, prepareVideo, seekVideo, THUMB_MAX } from './media.js';
 import { clamp, lerp, sleep, nextFrame, easeOutCubic, easeOutQuint, mulberry32 } from './util.js';
@@ -93,7 +93,7 @@ export class TimelineRenderer {
     this.W = W; this.H = H;
     this.out.width = W; this.out.height = H;
     this.glCanvas.width = W; this.glCanvas.height = H;
-    this.renderer = createGLRenderer(this.glCanvas, { flipY: currentOrientationFlip() }) || create2DRenderer(this.glCanvas);
+    this.renderer = createGLRenderer(this.glCanvas, { flipX: currentOrientationFlipX(), flipY: currentOrientationFlip() }) || create2DRenderer(this.glCanvas);
     this.isFallback = !!this.renderer.fallback;
   }
 

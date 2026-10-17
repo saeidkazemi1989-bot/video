@@ -1,5 +1,5 @@
 /** «وضعیت دستگاه» sheet — capability report the user can copy and send. */
-import { el, faNum, copyText } from '../core/util.js';
+import { el, faNum, copyText, textareaSelectAll, shareText } from '../core/util.js';
 import { state } from '../state.js';
 import { briefReport, orientationStatus, checkOrientation, patchSettings } from '../project.js';
 import { openSheet, btn, toast } from './shell.js';
@@ -43,8 +43,30 @@ export function openDiagSheet() {
     const box = el('div', { class: 'stack' });
     const body = el('div', { class: 'list' }, [el('div', { class: 'muted', text: 'در حال بررسی دستگاه…' })]);
     box.append(body);
+
+    /**
+     * The report is always written into a real, selectable textarea. On the phone
+     * `navigator.clipboard` often does nothing and `execCommand` needs a visible
+     * selection — which is exactly why «کپی نشد» happened. With this box the user
+     * can always long-press → «انتخاب همه» → «کپی», even with zero permissions.
+     */
+    const textBox = el('textarea', {
+      class: 'copybox diag__text',
+      readonly: true,
+      dir: 'ltr',
+      rows: 8,
+      'aria-label': 'متن گزارش دستگاه',
+      style: { direction: 'ltr', textAlign: 'left', width: '100%', minHeight: '150px' },
+    });
+    const copyFallback = (value) => {
+      textBox.value = value;
+      textareaSelectAll(textBox);
+      textBox.scrollIntoView?.({ block: 'center' });
+      toast('کپی نشد — متن گزارش انتخاب شد؛ نگه دار و «کپی» را بزن', 'warn', 5200);
+    };
+
     const actions = el('div', { class: 'row' });
-    box.append(actions);
+    box.append(textBox, actions);
 
     /** The manual escape hatch — rebuilt with the body so it never disappears. */
     const manualRow = () => el('div', { class: 'field' }, [
@@ -80,6 +102,7 @@ export function openDiagSheet() {
           ...errs.slice(-3).map((e) => el('div', { class: 'muted', dir: 'ltr', style: { textAlign: 'left', marginTop: '6px' }, text: `${e.where ? `${e.where} · ` : ''}${e.text}` })),
         ]));
       }
+      textBox.value = reportText(report);
     }
 
     (async () => {
@@ -104,8 +127,24 @@ export function openDiagSheet() {
         btn('📋 کپی گزارش', {
           primary: true,
           onClick: async () => {
-            const ok = await copyText(reportText(report));
-            toast(ok ? 'گزارش کپی شد — آن را بفرست' : 'کپی نشد', ok ? 'ok' : 'err');
+            const value = reportText(report);
+            const ok = await copyText(value);
+            if (ok) toast('گزارش کپی شد — بفرستش', 'ok');
+            else copyFallback(value);
+          },
+        }),
+        btn('📤 ارسال گزارش', {
+          small: true,
+          onClick: async () => {
+            const value = reportText(report);
+            const res = await shareText(value);
+            if (res === 'shared') toast('پنجرهٔ ارسال باز شد — تلگرام یا واتس‌اپ را انتخاب کن', 'ok', 4200);
+            else if (res === 'cancelled') { /* user closed the sheet */ }
+            else {
+              const ok = await copyText(value);
+              if (!ok) copyFallback(value);
+              else toast('اشتراک‌گذاری در دسترس نبود؛ گزارش کپی شد', 'warn', 4200);
+            }
           },
         }),
         btn('بستن', { ghost: true, onClick: close }),
