@@ -1,6 +1,6 @@
 {
   "name": "reelforge",
-  "version": "1.3.6",
+  "version": "1.3.7",
   "description": "ReelForge — از عکس و ویدیوهایت، خودکار یک ریل حرفه‌ای اینستاگرام بساز (اندروید + iOS)",
   "main": "index.js",
   "scripts": {
