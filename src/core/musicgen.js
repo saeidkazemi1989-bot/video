@@ -252,7 +252,7 @@ function createKit(ctx, cfg, dest, rng) {
     osc.detune.value = detune;
     const f = ctx.createBiquadFilter();
     f.type = 'lowpass';
-    f.frequency.value = filter ?? 8000;
+    f.frequency.value = Array.isArray(filter) ? filter[0] : (filter ?? 8000);
     f.Q.value = q;
     const g = ctx.createGain();
     const p = ctx.createStereoPanner();
