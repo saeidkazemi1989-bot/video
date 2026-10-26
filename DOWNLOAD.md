@@ -11,8 +11,16 @@
 3. **بروزرسانی بدون حذف برنامه**: با امضای ثابت (`reelforge-debug.keystore`)، نسخهٔ
    ۱٫۳٫۸ مستقیماً روی ۱٫۳٫۷ نصب می‌شود (حتی از دکمهٔ ⟳ داخل خود اپ).
 
-## ۱) لینک‌های دانلود اندروید (APK)
+## ۱) لینک‌های دانلود اندروید (APK — نسخهٔ ۱٫۳٫۸)
+| مشخصه | مقدار |
+|---|---|
+| فایل | `reelforge-v1.3.8-7048c6e-debug.apk` |
+| حجم | ۷٫۵۳ مگابایت (۷٬۵۲۷٬۹۲۴ بایت) |
+| SHA-256 | `882229f8ee7dfbce385c463959373c3e60f858a7fb95e5a9e2d63235167a2873` |
+| versionName / versionCode | ۱٫۳٫۸ / ۱۰۳۰۸ |
+
 - **صفحهٔ آخرین ریلیز:** <https://github.com/saeidkazemi1989-bot/video/releases/tag/v1.3.8>
+- **دانلود مستقیم فایل ریلیز:** <https://github.com/saeidkazemi1989-bot/video/releases/download/v1.3.8/reelforge-v1.3.8-7048c6e-debug.apk>
 - **فایل مستقیم همیشه به‌روز:** <https://github.com/saeidkazemi1989-bot/video/raw/apk-build/reelforge-latest.apk>
 - **آینهٔ CDN سریع (jsDelivr):** <https://cdn.jsdelivr.net/gh/saeidkazemi1989-bot/video@apk-build/reelforge-latest.apk>
 

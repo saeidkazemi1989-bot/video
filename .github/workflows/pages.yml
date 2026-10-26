@@ -20,6 +20,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.cfg.outcome == 'success' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,17 +40,19 @@ jobs:
         run: cp dist/index.html dist/404.html
 
       - name: Configure Pages
+        id: cfg
+        continue-on-error: true
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Upload artifact
+        if: steps.cfg.outcome == 'success'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
     needs: build
+    if: needs.build.outputs.configured == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
