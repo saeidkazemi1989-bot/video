@@ -34,6 +34,12 @@ export function renderMusicScreen(root, { rerender } = {}) {
   });
   wrap.append(fileInput);
 
+  let plan = null;
+  try { plan = ensurePlan(); } catch { plan = null; }
+  const targetMusicDuration = state.settings.cutMode === 'sequence' && plan?.duration
+    ? Math.round(plan.duration)
+    : state.settings.duration;
+
   if (!state.music) {
     wrap.append(el('div', { class: 'card card--pad-lg stack' }, [
       el('h3', { text: 'آهنگ ریلز را انتخاب کن' }),
@@ -46,7 +52,7 @@ export function renderMusicScreen(root, { rerender } = {}) {
       btn('🎼 یا از کتابخانهٔ آهنگ انتخاب کن', {
         block: true,
         onClick: () => openLibrarySheet({
-          duration: state.settings.duration,
+          duration: targetMusicDuration,
           onPick: (track) => { applyGeneratedTrack(track); },
         }),
       }),
@@ -57,7 +63,7 @@ export function renderMusicScreen(root, { rerender } = {}) {
       }),
     ]));
   } else {
-    wrap.append(musicCard(rerenderAll));
+    wrap.append(musicCard(rerenderAll, plan?.duration));
   }
 
   wrap.append(el('div', { class: 'card stack' }, [
@@ -81,17 +87,18 @@ export function renderMusicScreen(root, { rerender } = {}) {
     state.music ? btn('🗑 حذف آهنگ', { small: true, danger: true, ghost: true, onClick: () => { state.music = null; markDirty(); rerenderAll(); } }) : null,
   ]));
 
-  const plan = ensurePlan();
   setBottomBar([
     btn('مرحله بعد: پیش‌نمایش', { primary: true, onClick: () => { ensurePlan({ force: true }); go(5); } }),
   ]);
 }
 
-function musicCard(rerenderAll) {
+function musicCard(rerenderAll, computedDuration = null) {
   const m = state.music;
   const a = m.analysis;
   const info = musicInfo();
-  const planDuration = state.settings.duration;
+  const planDuration = (state.settings.cutMode === 'sequence' && computedDuration)
+    ? computedDuration
+    : state.settings.duration;
 
   const canvas = el('canvas', { style: { width: '100%', height: '84px', borderRadius: '12px', background: 'rgba(255,255,255,.04)' } });
   const head = el('span', { class: `badge ${a.confidence > 0.4 ? 'badge--ok' : 'badge--warn'}`, text: a.confidence > 0.4 ? 'ضرب‌آهنگ واضح' : 'ضرب‌آهنگ نامطمئن' });

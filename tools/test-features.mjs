@@ -9,7 +9,9 @@ import { detectSpeechSegments, buildSubtitles, estimateWpm } from '../src/core/v
 import { GENRES, generateTrack, buildArrangement } from '../src/core/musicgen.js';
 import * as Mod from '../src/core/musicgen.js';
 import * as Edit from '../src/core/editPlan.js';
-import { buildPlan, DEFAULT_SETTINGS } from '../src/core/planner.js';
+import { buildPlan, DEFAULT_SETTINGS, CUT_MODES, SEQUENCE_TRANSITIONS, resolveSequenceTransitionType, retimePlan } from '../src/core/planner.js';
+import { computeAutoLight, mergeGradeWithAutoLight } from '../src/core/lighting.js';
+import { computeMotion } from '../src/core/render.js';
 import { attachSubtitles } from '../src/core/overlays.js';
 import { drawSubtitles, SUBTITLE_STYLES } from '../src/core/text.js';
 import { buildCopy } from '../src/core/captions.js';
@@ -1601,6 +1603,154 @@ section('the video texture path is measured, not assumed');
   ok(seen.includes('probe:video:0'), 'the canvas path a video frame now takes is probed too', seen.join(','));
   ok(/درست/.test(Orient.orientationReport(fix)), 'the report still leads with the overall verdict');
   Orient.resetOrientationFix();
+}
+
+
+/* ================================================================== */
+section('sequential no-cut mode («پشت‌سرهم بدون برش») + auto-lighting');
+
+{
+  ok(CUT_MODES.length === 2 && CUT_MODES[0].id === 'beat' && CUT_MODES[1].id === 'sequence',
+    'two cut modes are exported: beat and sequence');
+  ok(SEQUENCE_TRANSITIONS.some((t) => t.id === 'auto') && SEQUENCE_TRANSITIONS.some((t) => t.id === 'fade'),
+    'sequence transition choices include auto and smooth fade');
+
+  const mkVid = (id, duration, extra = {}) => ({
+    id, kind: 'video', use: true, duration, width: 1080, height: 1920,
+    trimIn: 0, trimOut: null, volume: 1, muted: false, hero: false,
+    analysis: {
+      luma: 0.48, contrast: 0.2, saturation: 0.25, warmth: 0.01,
+      clipHi: 0.01, clipLo: 0.01, motion: 0.55, score: 0.7, focus: { x: 0.5, y: 0.42 },
+      ...(extra.analysis || {}),
+    },
+    ...extra,
+  });
+
+  // 4 videos of distinct lengths; even with hero on #3 and orderMode:'smart' and duration:15,
+  // sequential mode MUST keep all 4 unchopped in exact user order!
+  const vids = [
+    mkVid('v1', 7.2, { analysis: { luma: 0.20, contrast: 0.10, warmth: 0.18, clipHi: 0.01, clipLo: 0.22 } }),
+    mkVid('v2', 11.5, { analysis: { luma: 0.78, contrast: 0.22, warmth: -0.14, clipHi: 0.16, clipLo: 0.0 } }),
+    mkVid('v3', 4.8, { hero: true, trimIn: 1.0, trimOut: 4.3 }), // manual trim 3.3s
+    mkVid('v4', 9.0, { analysis: { luma: 0.47, contrast: 0.20, warmth: 0.02, clipHi: 0.01, clipLo: 0.01 } }),
+  ];
+
+  const seqPlan = buildPlan({
+    assets: vids,
+    presetId: 'vlog', // vlog default transition is 'cut' — sequence must still use a real transition!
+    music: null,
+    settings: { cutMode: 'sequence', orderMode: 'smart', duration: 15, framing: 'fit', autoLight: true },
+    seed: 42,
+  });
+
+  ok(seqPlan.meta.cutMode === 'sequence', 'plan records sequence mode');
+  ok(seqPlan.cuts.length === 4, 'exactly one shot per selected video — no slicing or scattering', String(seqPlan.cuts.length));
+  ok(JSON.stringify(seqPlan.cuts.map((c) => c.assetId)) === JSON.stringify(['v1', 'v2', 'v3', 'v4']),
+    'strictly preserves user intake order (even when hero/smart is set)', JSON.stringify(seqPlan.cuts.map((c) => c.assetId)));
+  ok(Math.abs(seqPlan.cuts[0].dur - 7.2) < 1e-3 && seqPlan.cuts[0].trimIn === 0 && seqPlan.cuts[0].trimOut === 7.2,
+    'video 1 plays its full 7.2s unchopped');
+  ok(Math.abs(seqPlan.cuts[1].dur - 11.5) < 1e-3 && seqPlan.cuts[1].speed === 1,
+    'video 2 plays its full 11.5s at 1x speed');
+  ok(Math.abs(seqPlan.cuts[2].dur - 3.3) < 1e-3 && seqPlan.cuts[2].trimIn === 1 && seqPlan.cuts[2].trimOut === 4.3,
+    'manual user trim on video 3 is respected (1.0s..4.3s = 3.3s)');
+  ok(Math.abs(seqPlan.duration - (7.2 + 11.5 + 3.3 + 9.0)) < 1e-2,
+    'total duration equals the exact sum of the clips (31.0s, not clamped to 15s)', String(seqPlan.duration));
+
+  // Transitions: none on cut 0, smooth transition on every subsequent clip boundary
+  ok(seqPlan.cuts[0].transition.type === 'cut' && seqPlan.cuts[0].transition.dur === 0,
+    'first clip starts cleanly without a transition');
+  for (let i = 1; i < seqPlan.cuts.length; i++) {
+    ok(seqPlan.cuts[i].transition.type === 'fade' && seqPlan.cuts[i].transition.dur > 0.15,
+      `boundary into clip ${i + 1} has a real smooth transition`, JSON.stringify(seqPlan.cuts[i].transition));
+  }
+
+  // Explicit transition override
+  const slidePlan = buildPlan({
+    assets: vids.slice(0, 3),
+    presetId: 'cinematic',
+    settings: { cutMode: 'sequence', sequenceTransition: 'slide' },
+  });
+  ok(slidePlan.cuts[1].transition.type === 'slide' && slidePlan.cuts[2].transition.type === 'slide',
+    'explicit sequenceTransition override applies to every boundary');
+
+  // Inside-clip motion on videos is steady (no artificial zoom bounce or camera shake)
+  for (const c of seqPlan.cuts) {
+    const mMid = computeMotion(c, 0.25, 1080, 1920, c.t0 + 0.5);
+    ok(mMid.zoom === 1 && mMid.pan[0] === 0 && mMid.pan[1] === 0 && mMid.rotation === 0,
+      `video ${c.assetId} plays steadily without artificial zoom/shake`, JSON.stringify(mMid));
+  }
+
+  // Non-overlapping overlays even with only 2 sequential videos
+  const twoVidPlan = buildPlan({
+    assets: vids.slice(0, 2),
+    presetId: 'brand',
+    settings: { cutMode: 'sequence', topic: 'معرفی محصول جدید' },
+  });
+  const lines = twoVidPlan.overlays.filter((o) => o.kind === 'line');
+  const overlaps = lines.filter((a, i) => lines.some((b, j) => j !== i && a.t0 < b.t1 && b.t0 < a.t1));
+  ok(lines.length >= 2 && overlaps.length === 0,
+    'on-screen caption lines never overlap even on a 2-clip sequential reel', JSON.stringify(lines));
+
+  // Long sequence over shorter music: fitToMusic / retime must NEVER drop trailing clips
+  const shortMusic = { duration: 14, bpm: 120, beatPeriod: 0.5, confidence: 0.8, beats: Array.from({ length: 28 }, (_, k) => k * 0.5), bestStart: 0 };
+  const longSeq = buildPlan({
+    assets: vids,
+    presetId: 'cinematic',
+    music: shortMusic,
+    settings: { cutMode: 'sequence' },
+  });
+  Edit.retime(longSeq);
+  ok(longSeq.cuts.length === 4 && Math.abs(longSeq.duration - 31.0) < 1e-2,
+    'retime/fitToMusic keeps all 4 clips intact even when the music track is shorter (musicLoop wraps it)');
+
+  // Swapping two sequential clips in the manual editor swaps their durations too
+  Edit.moveCut(longSeq, 0, +1);
+  ok(longSeq.cuts[0].assetId === 'v2' && Math.abs(longSeq.cuts[0].dur - 11.5) < 1e-3
+    && longSeq.cuts[1].assetId === 'v1' && Math.abs(longSeq.cuts[1].dur - 7.2) < 1e-3,
+    'moving a clip in sequence mode moves its full duration with it');
+
+  // Switching from beat mode to sequence mode via retimePlan deduplicates repeated assets
+  const beatFirst = buildPlan({ assets: vids.slice(0, 2), presetId: 'sport', settings: { cutMode: 'beat', duration: 20 } });
+  ok(beatFirst.cuts.length > 2, 'beat mode slices the 2 videos into many cuts');
+  const switchedToSeq = retimePlan(beatFirst, { cutMode: 'sequence' });
+  ok(switchedToSeq.cuts.length === 2, 'switching to sequence mode collapses back to 1 shot per unique video');
+
+  // ---- Per-clip Auto-Lighting («تنظیم خودکار نور») ----
+  const darkLight = seqPlan.cuts[0].autoLight; // v1: luma 0.20, contrast 0.10, warmth +0.18
+  const overLight = seqPlan.cuts[1].autoLight; // v2: luma 0.78, clipHi 0.16, warmth -0.14
+  const calmLight = seqPlan.cuts[3].autoLight; // v4: balanced luma 0.47
+  ok(darkLight.applied && darkLight.exposureMul > 1.15 && darkLight.gammaMul > 1.03 && darkLight.contrastMul > 1.03 && darkLight.tempDelta < -0.02,
+    'dark indoor warm clip is brightened, opened in shadows, contrast-boosted and cooled slightly', JSON.stringify(darkLight));
+  ok(overLight.applied && overLight.exposureMul < 0.92 && overLight.tempDelta > 0.02,
+    'overexposed cool clip has highlights tamed and warmth balanced', JSON.stringify(overLight));
+  ok(calmLight.applied === false && Math.abs(calmLight.exposureMul - 1) <= 0.025,
+    'already balanced clip is left untouched', JSON.stringify(calmLight));
+
+  // Highlight guard: dark room with a bright window does not blow out highlights
+  const guarded = computeAutoLight({ luma: 0.22, contrast: 0.2, clipHi: 0.16, clipLo: 0.1 });
+  const unguarded = computeAutoLight({ luma: 0.22, contrast: 0.2, clipHi: 0.0, clipLo: 0.1 });
+  ok(guarded.exposureMul < unguarded.exposureMul, 'highlight guard limits boost when highlights are already clipping');
+
+  // Grade merging + monochrome preservation + disable toggle
+  const baseGrade = STYLE_PRESETS.find((p) => p.id === 'vlog').grade;
+  const mergedDark = mergeGradeWithAutoLight(baseGrade, darkLight, { enabled: true });
+  ok(mergedDark.exposure > baseGrade.exposure, 'merged grade lifts exposure for a dark clip');
+  ok(mergeGradeWithAutoLight(baseGrade, darkLight, { enabled: false }) === baseGrade,
+    'disabling autoLight returns the preset grade untouched');
+  const noirGrade = STYLE_PRESETS.find((p) => p.id === 'noir').grade;
+  const dullLight = computeAutoLight({ luma: 0.30, contrast: 0.12, saturation: 0.05 });
+  const mergedNoir = mergeGradeWithAutoLight(noirGrade, dullLight, { enabled: true });
+  ok(mergedNoir.saturation === noirGrade.saturation, 'monochrome preset stays monochrome under autoLight');
+
+  // Brief engine understands sequential no-cut phrasing without touching normal briefs
+  const seqBrief = Brief.analyzeBrief('چند تا ویدیو دارم برش نزن و به ترتیب خودم پشت سرهم بیار');
+  ok(seqBrief.cutMode === 'sequence' && Brief.briefPatch(seqBrief).settings.cutMode === 'sequence',
+    'brief engine detects «برش نزن ... پشت سرهم» and sets cutMode=sequence');
+  const normalBrief = Brief.analyzeBrief('معرفی منو و فضای دنج کافه');
+  ok(normalBrief.cutMode === null && Brief.briefPatch(normalBrief).settings.cutMode === undefined,
+    'normal brief leaves user cutMode untouched');
+  ok(resolveSequenceTransitionType({ transition: 'cut' }, 'auto') === 'fade',
+    'resolveSequenceTransitionType upgrades hard cut presets to smooth fade');
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} feature checks passed`);

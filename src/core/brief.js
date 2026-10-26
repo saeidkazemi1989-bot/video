@@ -332,12 +332,20 @@ export function analyzeBrief(text = '', { lang = 'fa' } = {}) {
   if (/پرکردن قاب|تمام صفحه|تمام‌صفحه|بدون حاشیه|فول فریم|full frame|fill the frame/.test(hay)) framing = 'fill';
   if (/بدون برش|کامل دیده|همه‌ی عکس|همه عکس/.test(hay)) framing = 'fit';
 
+  let cutMode = null;
+  if (/پشت\s*سر\s*هم|پشت\s*هم|برش\s*نزن|تکه\s*نکن|تیکه\s*نکن|بدون\s*تکه|به\s*ترتیب\s*خودم|back\s*to\s*back|no\s*cuts/.test(hay)) {
+    cutMode = 'sequence';
+  } else if (/برش\s*روی\s*ضرب|برش\s*ریتمیک|تند\s*برش/.test(hay)) {
+    cutMode = 'beat';
+  }
+
   const notes = [];
   notes.push(`نیت: ${def ? def.label : 'مشخص نشد'}${intentScore ? '' : ' (کلمهٔ کلیدی پیدا نشد)'}`);
   notes.push(`سطح انرژی: ${energy >= 0.7 ? 'بالا' : energy >= 0.42 ? 'متعادل' : 'آرام'}`);
   if (bestStyle.id && bestStyle.score >= 2.5) notes.push(`سبک از خودِ متن: ${presetName(bestStyle.id)}`);
   else notes.push(`سبک از موضوع (${CATEGORY_LABELS[lang]?.[category] || category}): ${presetName(presetId)}`);
   if (explicitGenre) notes.push(`موسیقی را خودت گفته‌ای: ${genreOf(musicGenre).name}`);
+  if (cutMode === 'sequence') notes.push('چیدمان از متن: پشت‌سرهم (بدون برش)');
 
   return {
     ok: true,
@@ -361,6 +369,7 @@ export function analyzeBrief(text = '', { lang = 'fa' } = {}) {
     subtitles: !!subtitles,
     captions: !!captions,
     framing,
+    cutMode,
     topicLine: briefTopicLine(raw),
     keywords: briefKeywords(raw),
     notes,
@@ -385,6 +394,7 @@ export function briefPatch(analysis, { keepMusic = false } = {}) {
         musicBpm: analysis.musicBpm, musicTempo: analysis.musicTempo,
         energy: analysis.energy, energyLabel: analysis.energyLabel,
         subtitles: analysis.subtitles, framing: analysis.framing,
+        cutMode: analysis.cutMode || null,
         keywords: analysis.keywords, at: null,
       },
       topic: analysis.topicLine || analysis.text.slice(0, 48),
@@ -398,6 +408,9 @@ export function briefPatch(analysis, { keepMusic = false } = {}) {
     },
     music: null,
   };
+  if (analysis.cutMode === 'sequence' || analysis.cutMode === 'beat') {
+    patch.settings.cutMode = analysis.cutMode;
+  }
   // The user's own song always wins; only an in-app (generated) track follows the brief.
   if (!keepMusic && analysis.musicGenre) {
     patch.music = { genre: analysis.musicGenre, tempo: analysis.musicTempo, name: analysis.musicName, bpm: analysis.musicBpm };
@@ -408,17 +421,21 @@ export function briefPatch(analysis, { keepMusic = false } = {}) {
 /** Rows for the UI / the device report: label + value, in the app's language. */
 export function briefSummary(analysis, { faNum = (n) => String(n) } = {}) {
   if (!analysis?.ok) return [];
-  return [
+  const rows = [
     ['موضوع', analysis.categoryLabel],
     ['هدف', analysis.intentLabel],
     ['سبک تدوین', analysis.presetName],
     ['موسیقی', `${analysis.musicName} — ${faNum(analysis.musicBpm)} ضرب در دقیقه`],
     ['ریتم', `${analysis.energyLabel} (${faNum(Math.round(analysis.energy * 100))}٪)`],
-    ['طول ریلز', `${faNum(analysis.duration)} ثانیه`],
+    ['طول ریلز', analysis.cutMode === 'sequence' ? 'مجموع واقعی کلیپ‌ها (بدون برش)' : `${faNum(analysis.duration)} ثانیه`],
     ['لحن متن', analysis.toneLabel],
     ['زیرنویس', analysis.subtitles ? 'روشن' : 'خاموش'],
     ['قاب‌بندی', analysis.framing === 'fill' ? 'پرکردن قاب' : 'کامل (بدون برش)'],
   ];
+  if (analysis.cutMode) {
+    rows.push(['چیدمان کلیپ‌ها', analysis.cutMode === 'sequence' ? 'پشت‌سرهم (بدون برش)' : 'ریتمیک (برش روی ضرب)']);
+  }
+  return rows;
 }
 
 /** One-line form for logs and the diagnostics sheet. */

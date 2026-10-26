@@ -2,6 +2,7 @@
 import { state, notify } from '../state.js';
 import { el, faNum, clamp, vibrate } from '../core/util.js';
 import { PRESETS, DURATIONS, QUALITIES, ASPECTS, autoPreset } from '../data/styles.js';
+import { SEQUENCE_TRANSITIONS } from '../core/planner.js';
 import { go, btn, setBottomBar, chips, seg, switchRow, slider } from './shell.js';
 import { patchSettings, markDirty } from '../project.js';
 import { savePrefs } from '../state.js';
@@ -27,11 +28,42 @@ export function renderStyleScreen(root, { rerender } = {}) {
       : null,
   ]));
 
+  const isSeq = state.settings.cutMode === 'sequence';
+
   wrap.append(el('div', { class: 'card stack' }, [
     el('h3', { text: 'طول و شکل خروجی' }),
     el('div', { class: 'field' }, [
+      el('label', { text: 'نحوهٔ تدوین و برش ویدیوها' }),
+      seg([
+        { id: 'beat', label: '✂️ برش ریتمیک' },
+        { id: 'sequence', label: '🎞️ پشت‌سرهم (بدون برش)' },
+      ], state.settings.cutMode || 'beat', (id) => {
+        patchSettings({ cutMode: id });
+        savePrefs();
+        rerenderAll();
+      }),
+      el('div', {
+        class: 'muted',
+        text: isSeq
+          ? 'ویدیوها بدون هیچ برشی و دقیقاً به ترتیب خودت پشت‌سرهم می‌آیند؛ فقط در رفتن به ویدیوی بعدی ترنزیشن می‌خورد و قاب و نور تنظیم می‌شود.'
+          : 'ویدیوها هماهنگ با ضرب آهنگ برش می‌خورند و چیده می‌شوند.',
+      }),
+    ]),
+    isSeq ? el('div', { class: 'field' }, [
+      el('label', { text: 'ترنزیشن در رفتن به ویدیوی بعدی' }),
+      chips(SEQUENCE_TRANSITIONS, state.settings.sequenceTransition || 'auto', (id) => {
+        patchSettings({ sequenceTransition: id });
+        savePrefs();
+        rerenderAll();
+      }),
+    ]) : null,
+    el('div', { class: 'field' }, [
       el('label', { text: 'مدت ریلز (روی ضرب آهنگ تنظیم می‌شود)' }),
-      chips(DURATIONS, state.settings.duration, (id) => { patchSettings({ duration: id }); savePrefs(); rerender?.(); }),
+      chips(DURATIONS, state.settings.duration, (id) => { patchSettings({ duration: id }); savePrefs(); rerenderAll(); }),
+      isSeq ? el('div', {
+        class: 'badge badge--ok mt-8',
+        text: 'در حالت پشت‌سرهم، ویدیوها کوتاه یا برش نمی‌شوند و طول ریلز برابر مجموع واقعی کلیپ‌هایت است.',
+      }) : null,
     ]),
     el('div', { class: 'field' }, [
       el('label', { text: 'نسبت تصویر' }),
@@ -60,7 +92,8 @@ export function renderStyleScreen(root, { rerender } = {}) {
     switchRow('پایان‌بندی و دعوت به اقدام', 'متن پایانی + آیدی پیج', state.settings.outro !== false, (v) => { patchSettings({ outro: v }); rerender?.(); }),
     switchRow('نوار پیشرفت', 'نوار باریک پیشرفت در بالای کادر', state.settings.progressBar !== false, (v) => { patchSettings({ progressBar: v }); rerender?.(); }),
     switchRow('واترمارک آیدی', 'نمایش آیدی پیج روی ریلز', state.settings.watermark !== false, (v) => { patchSettings({ watermark: v }); rerender?.(); }),
-    switchRow('قاب‌بندی هوشمند', 'تشخیص چهره/سوژه و حرکت آرام کادر همراه او', state.settings.smartReframe !== false, (v) => { patchSettings({ smartReframe: v }); rerender?.(); }),
+    switchRow('قاب‌بندی هوشمند', 'تشخیص چهره/سوژه و حرکت آرام کادر همراه او', state.settings.smartReframe !== false, (v) => { patchSettings({ smartReframe: v }); savePrefs(); rerenderAll(); }),
+    switchRow('تنظیم خودکار نور هر نما', 'متعادل‌کردن خودکار نور، کنتراست و دمای رنگ هر ویدیو در کنار هم', state.settings.autoLight !== false, (v) => { patchSettings({ autoLight: v }); savePrefs(); rerenderAll(); }),
     el('div', { class: 'field mt-8' }, [
       el('label', { text: 'صدای اصلی کلیپ‌ها زیر موسیقی' }),
       slider({
@@ -74,10 +107,12 @@ export function renderStyleScreen(root, { rerender } = {}) {
       seg([
         { id: 'intake', label: 'همان ترتیب من' },
         { id: 'smart', label: 'هوشمند (بهترین اول)' },
-      ], state.settings.orderMode, (id) => { patchSettings({ orderMode: id }); rerender?.(); }),
-      el('div', { class: 'muted', text: state.settings.orderMode === 'intake'
-        ? 'نماها به همان ترتیبی که اضافه کردی می‌آیند.'
-        : 'اپ نماها را بر اساس کیفیت و تنوع مرتب می‌کند (ممکن است ترتیب عوض شود).' }),
+      ], isSeq ? 'intake' : state.settings.orderMode, (id) => { patchSettings({ orderMode: id }); savePrefs(); rerenderAll(); }),
+      el('div', { class: 'muted', text: isSeq
+        ? 'در حالت پشت‌سرهم، نماها همیشه دقیقاً به همان ترتیبی که اضافه کردی می‌آیند.'
+        : state.settings.orderMode === 'intake'
+          ? 'نماها به همان ترتیبی که اضافه کردی می‌آیند.'
+          : 'اپ نماها را بر اساس کیفیت و تنوع مرتب می‌کند (ممکن است ترتیب عوض شود).' }),
     ]),
     el('div', { class: 'field' }, [
       el('label', { text: 'قاب‌بندی عکس و ویدیو در کادر ۹:۱۶' }),

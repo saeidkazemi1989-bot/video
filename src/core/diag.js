@@ -379,7 +379,8 @@ export function reportText(report = {}) {
     if (c.brief) push('brief', c.brief);
     if (c.orientation) push('orientation', c.orientation);
     if (c.videoTexture) push('video-texture', c.videoTexture);
-    push('plan', [c.duration ? `duration=${c.duration}s` : '', c.framing ? `framing=${c.framing}` : '',
+    push('plan', [c.duration ? `duration=${c.duration}s` : '', c.cutMode ? `cutMode=${c.cutMode}` : '',
+      c.framing ? `framing=${c.framing}` : '', c.autoLight !== undefined ? `autoLight=${c.autoLight ? 'on' : 'off'}` : '',
       c.order ? `order=${c.order}` : '', c.quality ? `quality=${c.quality}` : '', c.fps ? `fps=${c.fps}` : '',
       c.preset ? `preset=${c.preset}` : '', c.music ? `music=${c.music}` : ''].filter(Boolean).join(' '));
   }
@@ -426,7 +427,11 @@ export function reportRows(report = {}) {
     rows.push(
       ['مرحله', c.stage || '—'],
       ['رسانه', c.assets || '—'],
-      ['تنظیمات تدوین', [c.framing === 'fill' ? 'پرکردن قاب' : 'کامل', c.order === 'smart' ? 'ترتیب هوشمند' : 'ترتیب خودم',
+      ['تنظیمات تدوین', [
+        c.cutMode === 'sequence' ? 'پشت‌سرهم (بدون برش)' : '',
+        c.framing === 'fill' ? 'پرکردن قاب' : 'کامل',
+        c.order === 'smart' ? 'ترتیب هوشمند' : 'ترتیب خودم',
+        c.autoLight === false ? 'نور خام' : '',
         c.quality || '', c.fps ? `${c.fps} فریم` : '', c.preset || '', c.music || ''].filter(Boolean).join(' · ')],
     );
     if (c.brief) rows.push(['هدف کلیپ', c.brief]);

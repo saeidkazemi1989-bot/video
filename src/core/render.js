@@ -11,6 +11,7 @@ import { clamp, lerp, sleep, nextFrame, easeOutCubic, easeOutQuint, mulberry32 }
 import { focusAtTime } from './face.js';
 import { buildSoundtrack, audioBufferToWav, encodeAAC, musicLoop } from './audio.js';
 import { createExporter } from './encode.js';
+import { mergeGradeWithAutoLight } from './lighting.js';
 
 /** Motion language per cut -> shader uniforms. */
 export function computeMotion(cut, local, W, H, time) {
@@ -253,18 +254,22 @@ export class TimelineRenderer {
       };
     }
 
+    const grade = mergeGradeWithAutoLight(plan.preset.grade, cut.autoLight, {
+      enabled: plan.settings?.autoLight !== false,
+    });
+
     this.renderer.draw({
       source: src.source,
       srcWidth: src.width,
       srcHeight: src.height,
-      grade: plan.preset.grade,
+      grade,
       zoom: motion.zoom,
       pan: motion.pan,
       rotation: motion.rotation,
       focus: src.focus,
       transition,
       time,
-      letterbox: plan.preset.grade.letterbox || 0,
+      letterbox: grade.letterbox || 0,
       framing: plan.settings?.framing === 'fill' ? 0 : 1,   // default: show the whole picture
     });
 

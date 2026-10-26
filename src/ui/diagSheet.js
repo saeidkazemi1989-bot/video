@@ -13,6 +13,8 @@ export function appContext() {
     stage: state.step === 5.5 ? '۵٫۵ تدوین دستی' : `مرحله ${faNum(state.step)}`,
     assets: `${faNum(photos)} عکس · ${faNum(videos)} ویدیو`,
     duration: state.settings.duration,
+    cutMode: state.settings.cutMode || 'beat',
+    autoLight: state.settings.autoLight !== false,
     framing: state.settings.framing || 'fit',
     order: state.settings.orderMode || 'intake',
     quality: state.settings.quality || '',

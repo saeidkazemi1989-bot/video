@@ -223,7 +223,6 @@ void main(){
   // ---- blend with the previous shot during a transition ----
   if (uTransType != 0 && uHasPrev > 0.5 && tp < 1.0) {
     vec3 prev = fetchPrev(cvPrev);
-    prev = grade(prev, uv);
     float a = tp;
     if (uTransType == 1) {                       // fade
       col = mix(prev, col, smoothstep(0.0, 1.0, a));
@@ -548,6 +547,13 @@ export function create2DRenderer(canvas) {
       const w = canvas.width, h = canvas.height;
       const cover = coverRect(srcWidth, srcHeight, w, h, { zoom, focus, pan });
       const { x, y, w: dw, h: dh } = cover;
+      const filterCss = [
+        `brightness(${grade.exposure})`,
+        `contrast(${grade.contrast})`,
+        `saturate(${grade.saturation + grade.vibrance * 0.4})`,
+        grade.saturation < 0.15 ? 'grayscale(1)' : '',
+        `sepia(${Math.max(0, grade.temperature) * 0.35})`,
+      ].filter(Boolean).join(' ');
       if (framing) {
         // blurred cover as the backdrop, then the whole picture inside it
         const fit = containRect(srcWidth, srcHeight, w, h);
@@ -555,18 +561,16 @@ export function create2DRenderer(canvas) {
         ctx.filter = 'blur(26px) brightness(0.55) saturate(0.75)';
         ctx.drawImage(source, x, y, dw, dh);
         ctx.restore();
+        ctx.save();
+        ctx.filter = filterCss;
         ctx.drawImage(source, fit.x, fit.y, fit.w, fit.h);
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.filter = filterCss;
+        ctx.drawImage(source, x, y, dw, dh);
+        ctx.restore();
       }
-      ctx.save();
-      ctx.filter = [
-        `brightness(${grade.exposure})`,
-        `contrast(${grade.contrast})`,
-        `saturate(${grade.saturation + grade.vibrance * 0.4})`,
-        grade.saturation < 0.15 ? 'grayscale(1)' : '',
-        `sepia(${Math.max(0, grade.temperature) * 0.35})`,
-      ].filter(Boolean).join(' ');
-      if (!framing) ctx.drawImage(source, x, y, dw, dh);
-      ctx.restore();
       if (transition?.type && transition.type !== 'cut') {
         ctx.fillStyle = transition.type === 'flash'
           ? `rgba(255,255,255,${Math.max(0, 1 - Math.abs(transition.progress - 0.5) * 2) * 0.85})`

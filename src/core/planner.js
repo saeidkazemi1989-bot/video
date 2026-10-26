@@ -7,8 +7,42 @@ import { clamp, mulberry32, shuffle } from './util.js';
 import { energyAt, nearestBeat, energyAt as energyLevel, beatsInRange } from './beats.js';
 import { rankAssets } from './analyze.js';
 import { buildCopy } from './captions.js';
-import { resolveCutSource } from './cut.js';
+import { resolveCutSource, MIN_CUT } from './cut.js';
 import { buildOverlays } from './overlays.js';
+import { computeAutoLight } from './lighting.js';
+
+export const CUT_MODES = [
+  {
+    id: 'beat',
+    label: 'ریتمیک (برش روی ضرب)',
+    hint: 'ویدیوها هماهنگ با ضرب آهنگ برش می‌خورند و در ریلز چیده می‌شوند.',
+  },
+  {
+    id: 'sequence',
+    label: 'پشت‌سرهم (بدون برش)',
+    hint: 'ویدیوها بدون تکه‌شدن و دقیقاً به ترتیب خودت پشت‌سرهم می‌آیند؛ فقط در رفتن به ویدیوی بعدی ترنزیشن می‌خورد و قاب و نور تنظیم می‌شود.',
+  },
+];
+
+export const SEQUENCE_TRANSITIONS = [
+  { id: 'auto', label: 'هماهنگ با سبک' },
+  { id: 'fade', label: 'محو نرم' },
+  { id: 'slide', label: 'اسلاید' },
+  { id: 'zoom', label: 'زوم نرم' },
+  { id: 'lightleak', label: 'نشت نور' },
+  { id: 'zoomblur', label: 'زوم حرکتی' },
+  { id: 'flash', label: 'فلاش' },
+];
+
+const VALID_SEQ_TRANSITIONS = new Set(['fade', 'flash', 'zoomblur', 'whip', 'glitch', 'slide', 'zoom', 'lightleak', 'spin']);
+
+export function resolveSequenceTransitionType(preset, requested = 'auto') {
+  if (requested && requested !== 'auto' && VALID_SEQ_TRANSITIONS.has(requested)) return requested;
+  if (preset?.transition && preset.transition !== 'auto' && preset.transition !== 'cut' && VALID_SEQ_TRANSITIONS.has(preset.transition)) {
+    return preset.transition;
+  }
+  return 'fade';
+}
 
 export const DEFAULT_SETTINGS = {
   duration: 30,
@@ -25,6 +59,9 @@ export const DEFAULT_SETTINGS = {
   captions: true,
   hook: true,
   outro: true,
+  cutMode: 'beat',      // 'beat' (برش روی ضرب) | 'sequence' (پشت‌سرهم بدون برش)
+  sequenceTransition: 'auto', // transition used between sequential clips
+  autoLight: true,      // تنظیم خودکار نور و روشنایی هر نما
   orderMode: 'intake',  // 'intake' (همان ترتیبی که اضافه کردی) | 'smart' (مرتب‌سازی هوشمند)
   framing: 'fit',       // 'fit' = همهٔ عکس دیده شود | 'fill' = قاب پر شود
   musicGain: 1,
@@ -90,164 +127,258 @@ export function buildPlan({
   const hasBeat = !!(music && music.beats?.length && music.confidence > 0.18 && music.bpm > 45);
   const beatPeriod = hasBeat ? music.beatPeriod : 0.6;    // fallback: 100 BPM grid
   const barSec = beatPeriod * 4;
+  const isSequence = S.cutMode === 'sequence';
 
-  let targetD = clamp(S.duration || 30, 6, 180);
-  let bars = Math.max(2, Math.round(targetD / barSec));
-  if (music && Number.isFinite(music.duration) && music.duration > 3) {
-    const maxBars = Math.floor(((music.duration - (music.minStart || 0)) - 0.4) / barSec);
-    if (maxBars >= 2) bars = Math.min(bars, maxBars);
-  }
-  let totalBeats = bars * 4;
-  let duration = totalBeats * beatPeriod;
-
+  const cuts = [];
+  let duration = 0;
+  let totalBeats = 0;
+  let bars = 0;
   let musicStart = S.musicStart ?? (hasBeat ? music.bestStart : 0) ?? 0;
-  if (music) {
-    const lo = music.minStart || 0;
-    musicStart = clamp(musicStart, lo, Math.max(lo, (music.duration || 0) - duration - 0.05));
-    if (hasBeat) musicStart = nearestBeat(music, musicStart, beatPeriod * 0.6);
-  }
 
-  // ---------------- shot count ----------------
-  const minBeats = Math.max(1, Math.round(preset.minShot / beatPeriod));
-  const maxBeats = Math.max(minBeats + 1, Math.round(preset.maxShot / beatPeriod));
-  // `pace` is a shot-LENGTH multiplier: cinematic (1.45) breathes, sport (0.55) snaps.
-  // It used to be divided, which made every "fast" style cut slower than «سینمایی».
-  const desiredShotSec = clamp(2.7 * preset.pace, preset.minShot * 0.95, preset.maxShot);
-  let shots = Math.max(3, Math.round(totalBeats / Math.max(1, Math.round(desiredShotSec / beatPeriod))));
-  const capacity = Math.max(3, Math.floor(duration / (preset.minShot * 0.92)));
-  shots = clamp(Math.max(shots, Math.min(usable.length, capacity)), 3, 60);
+  if (isSequence) {
+    // ---------------- sequential no-cut mode ----------------
+    // Every selected media item plays once, in the exact order the user placed
+    // it, with zero slicing/chopping and a smooth transition only between items.
+    let t = 0;
+    usable.forEach((asset, i) => {
+      let dur;
+      let trimIn = 0;
+      let trimOut = null;
+      let planMute = true;
+      let motion;
 
-  let beatPattern = evenDistribute(totalBeats, shots, minBeats, maxBeats);
+      if (asset.kind === 'video') {
+        const rawDur = Math.max(MIN_CUT, asset.duration || 0);
+        const srcIn = clamp(asset.trimIn || 0, 0, Math.max(0, rawDur - MIN_CUT));
+        const srcOut = Math.max(srcIn + MIN_CUT, asset.trimOut ?? rawDur);
+        dur = +(srcOut - srcIn).toFixed(4);
+        trimIn = +srcIn.toFixed(4);
+        trimOut = +srcOut.toFixed(4);
+        planMute = (S.sourceGain ?? 0.35) <= 0.001;
+        // Steady shot inside the video (smart framing + autoLight do the work;
+        // dirX alternates so directional transitions slide cleanly).
+        motion = {
+          type: 'still',
+          dirX: i % 2 === 1 ? 1 : -1,
+          dirY: 0,
+          amount: 0,
+          shake: 0,
+        };
+      } else {
+        const photoBase = clamp(S.photoDuration || 3.2, 1.5, 10);
+        dur = +(hasBeat ? Math.max(MIN_CUT, Math.round(photoBase / beatPeriod) * beatPeriod) : photoBase).toFixed(4);
+        const dirX = rng() * 2 - 1;
+        const dirY = rng() * 2 - 1;
+        motion = {
+          type: 'kenburns-slow',
+          dirX: +dirX.toFixed(3),
+          dirY: +dirY.toFixed(3),
+          amount: 0.07,
+          shake: 0,
+        };
+      }
 
-  // high-energy burst: borrow single beats from longer shots to double the cut rate
-  if (hasBeat && preset.pace <= 1.0 && beatPattern.length < capacity) {
-    const burstBudget = clamp(Math.round(beatPattern.length * 0.18), 1, 4);
-    for (let b = 0, added = 0; b < beatPattern.length && added < burstBudget; b++) {
-      const idx = Math.floor(rng() * beatPattern.length);
-      if (beatPattern[idx] >= minBeats + 1 && minBeats >= 1) {
-        beatPattern[idx] -= minBeats;
-        beatPattern.splice(idx + 1, 0, minBeats);
-        added++;
+      cuts.push({
+        index: i,
+        t0: +t.toFixed(4),
+        t1: +(t + dur).toFixed(4),
+        dur,
+        beats: Math.max(1, Math.round(dur / beatPeriod)),
+        asset,
+        assetId: asset.id || null,
+        trimIn,
+        trimOut,
+        speed: 1,
+        motion,
+        autoLight: computeAutoLight(asset.analysis),
+        transition: { type: 'cut', dur: 0 },
+        planMute,
+      });
+      t += dur;
+    });
+
+    duration = +t.toFixed(4);
+    totalBeats = Math.max(1, Math.round(duration / beatPeriod));
+    bars = Math.max(1, Math.round(totalBeats / 4));
+
+    if (music) {
+      const lo = music.minStart || 0;
+      const needWin = Math.min(duration, Math.max(0, (music.duration || 0) - lo));
+      musicStart = clamp(musicStart, lo, Math.max(lo, (music.duration || 0) - needWin - 0.05));
+      if (hasBeat) musicStart = nearestBeat(music, musicStart, beatPeriod * 0.6);
+    }
+
+    // Smooth transition ONLY at each clip-to-clip boundary (never inside a clip)
+    const trType = resolveSequenceTransitionType(preset, S.sequenceTransition);
+    for (let i = 1; i < cuts.length; i++) {
+      const baseDur = Math.max(0.32, (preset.transDur || 0.36) * (trType === 'fade' ? 1.25 : 1));
+      const maxSafe = Math.min(0.75, Math.max(0.12, 0.42 * Math.min(cuts[i - 1].dur, cuts[i].dur)));
+      cuts[i].transition = {
+        type: trType,
+        dur: +clamp(baseDur, 0.12, maxSafe).toFixed(3),
+      };
+    }
+    cuts[0].transition = { type: 'cut', dur: 0 };
+  } else {
+    // ---------------- beat-sliced director mode ----------------
+    const targetD = clamp(S.duration || 30, 6, 180);
+    bars = Math.max(2, Math.round(targetD / barSec));
+    if (music && Number.isFinite(music.duration) && music.duration > 3) {
+      const maxBars = Math.floor(((music.duration - (music.minStart || 0)) - 0.4) / barSec);
+      if (maxBars >= 2) bars = Math.min(bars, maxBars);
+    }
+    totalBeats = bars * 4;
+    duration = totalBeats * beatPeriod;
+
+    if (music) {
+      const lo = music.minStart || 0;
+      musicStart = clamp(musicStart, lo, Math.max(lo, (music.duration || 0) - duration - 0.05));
+      if (hasBeat) musicStart = nearestBeat(music, musicStart, beatPeriod * 0.6);
+    }
+
+    // ---------------- shot count ----------------
+    const minBeats = Math.max(1, Math.round(preset.minShot / beatPeriod));
+    const maxBeats = Math.max(minBeats + 1, Math.round(preset.maxShot / beatPeriod));
+    // `pace` is a shot-LENGTH multiplier: cinematic (1.45) breathes, sport (0.55) snaps.
+    // It used to be divided, which made every "fast" style cut slower than «سینمایی».
+    const desiredShotSec = clamp(2.7 * preset.pace, preset.minShot * 0.95, preset.maxShot);
+    let shots = Math.max(3, Math.round(totalBeats / Math.max(1, Math.round(desiredShotSec / beatPeriod))));
+    const capacity = Math.max(3, Math.floor(duration / (preset.minShot * 0.92)));
+    shots = clamp(Math.max(shots, Math.min(usable.length, capacity)), 3, 60);
+
+    const beatPattern = evenDistribute(totalBeats, shots, minBeats, maxBeats);
+
+    // high-energy burst: borrow single beats from longer shots to double the cut rate
+    if (hasBeat && preset.pace <= 1.0 && beatPattern.length < capacity) {
+      const burstBudget = clamp(Math.round(beatPattern.length * 0.18), 1, 4);
+      for (let b = 0, added = 0; b < beatPattern.length && added < burstBudget; b++) {
+        const idx = Math.floor(rng() * beatPattern.length);
+        if (beatPattern[idx] >= minBeats + 1 && minBeats >= 1) {
+          beatPattern[idx] -= minBeats;
+          beatPattern.splice(idx + 1, 0, minBeats);
+          added++;
+        }
       }
     }
-  }
 
-  // ---------------- cuts ----------------
-  const cuts = [];
-  let t = 0;
-  beatPattern.forEach((beats, i) => {
-    const dur = beats * beatPeriod;
-    cuts.push({
-      index: i,
-      t0: +t.toFixed(4),
-      t1: +(t + dur).toFixed(4),
-      dur: +dur.toFixed(4),
-      beats,
-      asset: null,
-      assetId: null,
-      trimIn: 0,
-      trimOut: null,
-      speed: 1,
-      motion: null,
-      transition: { type: 'cut', dur: 0 },
-      planMute: false,
+    // ---------------- cuts ----------------
+    let t = 0;
+    beatPattern.forEach((beats, i) => {
+      const dur = beats * beatPeriod;
+      cuts.push({
+        index: i,
+        t0: +t.toFixed(4),
+        t1: +(t + dur).toFixed(4),
+        dur: +dur.toFixed(4),
+        beats,
+        asset: null,
+        assetId: null,
+        trimIn: 0,
+        trimOut: null,
+        speed: 1,
+        motion: null,
+        autoLight: null,
+        transition: { type: 'cut', dur: 0 },
+        planMute: false,
+      });
+      t += dur;
     });
-    t += dur;
-  });
-  duration = +t.toFixed(4);
+    duration = +t.toFixed(4);
 
-  // ---------------- asset order ----------------
-  let ordered = S.orderMode === 'intake' ? usable.slice() : rankAssets(usable, seed);
-  if (ordered.length > cuts.length) {
-    const heroes = ordered.filter((a) => a.hero);
-    const keep = Math.max(0, cuts.length - heroes.length);
-    ordered = [...heroes, ...ordered.filter((a) => !a.hero).slice(0, keep)].slice(0, cuts.length);
-  }
-
-  const energies = cuts.map((c) => (music ? energyAt(music, musicStart + (c.t0 + c.t1) / 2) : 0.5));
-  let peakIdx = 0;
-  energies.forEach((v, i) => { if (v > energies[peakIdx]) peakIdx = i; });
-  if (music?.dropTime && hasBeat) {
-    const rel = music.dropTime - musicStart;
-    if (rel > 0.5 && rel < duration - 0.5) {
-      const idx = cuts.findIndex((c) => rel >= c.t0 && rel <= c.t1);
-      if (idx >= 0) peakIdx = idx;
+    // ---------------- asset order ----------------
+    let ordered = S.orderMode === 'intake' ? usable.slice() : rankAssets(usable, seed);
+    if (ordered.length > cuts.length) {
+      const heroes = ordered.filter((a) => a.hero);
+      const keep = Math.max(0, cuts.length - heroes.length);
+      ordered = [...heroes, ...ordered.filter((a) => !a.hero).slice(0, keep)].slice(0, cuts.length);
     }
-  }
 
-  // hero shot goes to the strongest musical moment, the rest follow in rank order
-  const assignment = new Array(cuts.length).fill(null);
-  const queue = ordered.slice();
-  assignment[peakIdx] = queue.shift();
-  for (let i = 0; i < cuts.length; i++) {
-    if (assignment[i]) continue;
-    if (!queue.length) queue.push(...shuffle(rng, ordered));
-    let next = queue.shift();
-    // avoid the same asset on back-to-back cuts
-    let guard = 0;
-    while (next && assignment[i - 1]?.id === next.id && queue.length && guard++ < 5) {
-      queue.push(next);
-      next = queue.shift();
+    const energies = cuts.map((c) => (music ? energyAt(music, musicStart + (c.t0 + c.t1) / 2) : 0.5));
+    let peakIdx = 0;
+    energies.forEach((v, i) => { if (v > energies[peakIdx]) peakIdx = i; });
+    if (music?.dropTime && hasBeat) {
+      const rel = music.dropTime - musicStart;
+      if (rel > 0.5 && rel < duration - 0.5) {
+        const idx = cuts.findIndex((c) => rel >= c.t0 && rel <= c.t1);
+        if (idx >= 0) peakIdx = idx;
+      }
     }
-    assignment[i] = next;
+
+    // hero shot goes to the strongest musical moment, the rest follow in rank order
+    const assignment = new Array(cuts.length).fill(null);
+    const queue = ordered.slice();
+    assignment[peakIdx] = queue.shift();
+    for (let i = 0; i < cuts.length; i++) {
+      if (assignment[i]) continue;
+      if (!queue.length) queue.push(...shuffle(rng, ordered));
+      let next = queue.shift();
+      // avoid the same asset on back-to-back cuts
+      let guard = 0;
+      while (next && assignment[i - 1]?.id === next.id && queue.length && guard++ < 5) {
+        queue.push(next);
+        next = queue.shift();
+      }
+      assignment[i] = next;
+    }
+
+    // ---------------- per-cut decisions ----------------
+    const usedCount = new Map();
+    cuts.forEach((cut, i) => {
+      const asset = assignment[i];
+      cut.asset = asset;
+      cut.assetId = asset?.id || null;
+      if (!asset) return;
+      const reuse = usedCount.get(asset.id) || 0;
+      usedCount.set(asset.id, reuse + 1);
+
+      const resolved = resolveCutSource({ asset, dur: cut.dur, reuse, sourceGain: S.sourceGain });
+      cut.trimIn = resolved.trimIn;
+      cut.trimOut = resolved.trimOut;
+      cut.speed = resolved.speed;
+      cut.planMute = resolved.planMute;
+      cut.autoLight = computeAutoLight(asset.analysis);
+
+      // motion language
+      const autoMotion = asset.kind === 'photo'
+        ? (i % 3 === 0 ? 'kenburns' : i % 3 === 1 ? 'zoomout' : 'pan')
+        : ((asset.analysis?.motion || 0) > 0.42 ? 'punch' : 'kenburns');
+      const type = preset.motion === 'auto' ? autoMotion : preset.motion;
+      const dirX = rng() * 2 - 1;
+      const dirY = rng() * 2 - 1;
+      cut.motion = {
+        type,
+        dirX: +dirX.toFixed(3),
+        dirY: +dirY.toFixed(3),
+        amount: +(0.06 + rng() * 0.12).toFixed(3),
+        shake: clamp(0.18 + energies[i] * 0.5, 0, 0.7) * (type === 'punch' ? 1 : 0.4),
+      };
+    });
+
+    // ---------------- transitions ----------------
+    const heavy = new Set(['zoomblur', 'whip', 'glitch', 'lightleak', 'zoom', 'spin', 'flash']);
+    const presetType = preset.transition === 'auto' ? 'cut' : preset.transition;
+    let lastHeavy = false;
+    cuts.forEach((cut, i) => {
+      if (i === 0) return;
+      const isDownbeat = (cuts[i - 1].beats % 4 === 0) || (i > 0 && cut.beats >= 4);
+      const energyJump = energies[i] - energies[i - 1] > 0.12;
+      const isPeak = i === peakIdx;
+      let type = 'cut';
+      if (isPeak || energyJump) type = pickHeavy(presetType, heavy, rng);
+      else if (isDownbeat) type = presetType;
+      else type = rng() < 0.25 ? presetType : 'cut';
+      if (i === 1 && presetType !== 'cut') type = presetType;
+      if (lastHeavy && heavy.has(type) && !isPeak) type = 'cut';
+      if (i === cuts.length - 1 && duration > 4) type = presetType === 'cut' ? 'fade' : presetType;
+      cut.transition = {
+        type,
+        dur: type === 'cut' ? 0 : +(preset.transDur * (type === 'flash' ? 0.7 : type === 'fade' ? 1.3 : 1)).toFixed(3),
+      };
+      lastHeavy = heavy.has(type);
+    });
+    // no transition on the very first frame
+    cuts[0].transition = { type: 'cut', dur: 0 };
   }
-
-  // ---------------- per-cut decisions ----------------
-  const usedCount = new Map();
-  cuts.forEach((cut, i) => {
-    const asset = assignment[i];
-    cut.asset = asset;
-    cut.assetId = asset?.id || null;
-    if (!asset) return;
-    const reuse = usedCount.get(asset.id) || 0;
-    usedCount.set(asset.id, reuse + 1);
-
-    const resolved = resolveCutSource({ asset, dur: cut.dur, reuse, sourceGain: S.sourceGain });
-    cut.trimIn = resolved.trimIn;
-    cut.trimOut = resolved.trimOut;
-    cut.speed = resolved.speed;
-    cut.planMute = resolved.planMute;
-
-    // motion language
-    const autoMotion = asset.kind === 'photo'
-      ? (i % 3 === 0 ? 'kenburns' : i % 3 === 1 ? 'zoomout' : 'pan')
-      : ((asset.analysis?.motion || 0) > 0.42 ? 'punch' : 'kenburns');
-    const type = preset.motion === 'auto' ? autoMotion : preset.motion;
-    const dirX = rng() * 2 - 1;
-    const dirY = rng() * 2 - 1;
-    cut.motion = {
-      type,
-      dirX: +dirX.toFixed(3),
-      dirY: +dirY.toFixed(3),
-      amount: +(0.06 + rng() * 0.12).toFixed(3),
-      shake: clamp(0.18 + energies[i] * 0.5, 0, 0.7) * (type === 'punch' ? 1 : 0.4),
-    };
-  });
-
-  // ---------------- transitions ----------------
-  const heavy = new Set(['zoomblur', 'whip', 'glitch', 'lightleak', 'zoom', 'spin', 'flash']);
-  const presetType = preset.transition === 'auto' ? 'cut' : preset.transition;
-  let lastHeavy = false;
-  cuts.forEach((cut, i) => {
-    if (i === 0) return;
-    const isDownbeat = (cuts[i - 1].beats % 4 === 0) || (i > 0 && cut.beats >= 4);
-    const energyJump = energies[i] - energies[i - 1] > 0.12;
-    const isPeak = i === peakIdx;
-    let type = 'cut';
-    if (isPeak || energyJump) type = pickHeavy(presetType, heavy, rng);
-    else if (isDownbeat) type = presetType;
-    else type = rng() < 0.25 ? presetType : 'cut';
-    if (i === 1 && presetType !== 'cut') type = presetType;
-    if (lastHeavy && heavy.has(type) && !isPeak) type = 'cut';
-    if (i === cuts.length - 1 && duration > 4) type = presetType === 'cut' ? 'fade' : presetType;
-    cut.transition = {
-      type,
-      dur: type === 'cut' ? 0 : +(preset.transDur * (type === 'flash' ? 0.7 : type === 'fade' ? 1.3 : 1)).toFixed(3),
-    };
-    lastHeavy = heavy.has(type);
-  });
-  // no transition on the very first frame
-  cuts[0].transition = { type: 'cut', dur: 0 };
 
   // ---------------- copy / text ----------------
   const copy = buildCopy({
@@ -296,6 +427,8 @@ export function buildPlan({
       avgShot: +(duration / cuts.length).toFixed(2),
       transitions: cuts.filter((c) => c.transition.type !== 'cut').length,
       assetsUsed: new Set(cuts.map((c) => c.assetId)).size,
+      cutMode: isSequence ? 'sequence' : 'beat',
+      autoLightAdjusted: cuts.filter((c) => c.autoLight?.applied).length,
       analysisDone,
     },
     generatedAt: Date.now(),
@@ -319,8 +452,17 @@ function pickHeavy(presetType, heavy, rng) {
 
 /** Re-time an existing plan after the user changes duration/quality (keeps media). */
 export function retimePlan(plan, settings) {
+  const seen = new Set();
+  const uniqueAssets = [];
+  for (const c of plan.cuts) {
+    if (!c.asset) continue;
+    const key = c.asset.id || c.asset;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueAssets.push(c.asset);
+  }
   return buildPlan({
-    assets: plan.cuts.map((c) => c.asset).filter(Boolean),
+    assets: uniqueAssets,
     presetId: plan.presetId,
     music: plan._music || null,
     settings: { ...plan.settings, ...settings },

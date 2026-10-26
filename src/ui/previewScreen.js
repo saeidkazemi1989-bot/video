@@ -86,9 +86,13 @@ export function renderPreviewScreen(root, { rerender } = {}) {
       el('h3', { text: 'خلاصه تدوین' }),
       el('span', { class: 'badge badge--ok', text: plan.preset.name }),
     ]),
+    el('div', { class: 'kv' }, [el('span', { text: 'حالت چیدمان' }), el('b', { text: plan.meta.cutMode === 'sequence' ? 'پشت‌سرهم (بدون برش)' : 'برش ریتمیک روی ضرب' })]),
     el('div', { class: 'kv' }, [el('span', { text: 'مدت ریلز' }), el('b', { text: fmtTime(plan.duration) })]),
     el('div', { class: 'kv' }, [el('span', { text: 'تعداد نما' }), el('b', { text: faNum(plan.meta.shots) })]),
     el('div', { class: 'kv' }, [el('span', { text: 'میانگین طول هر نما' }), el('b', { text: `${faNum(plan.meta.avgShot)} ثانیه` })]),
+    el('div', { class: 'kv' }, [el('span', { text: 'تنظیم قاب و نور' }), el('b', {
+      text: `${plan.settings?.framing === 'fill' ? 'پرکردن قاب' : 'کامل بدون برش'} • ${plan.settings?.autoLight !== false ? 'تنظیم نور فعال' : 'نور خام'}`,
+    })]),
     el('div', { class: 'kv' }, [el('span', { text: 'ریتم' }), el('b', { text: plan.hasBeat ? `${faNum(plan.bpm)} BPM روی ضرب` : 'شبکه ۱۰۰ ضربه' })]),
     el('div', { class: 'kv' }, [el('span', { text: 'فایل‌های استفاده‌شده' }), el('b', { text: `${faNum(plan.meta.assetsUsed)} از ${faNum(state.assets.filter((a) => a.use).length)}` })]),
     el('div', { class: 'kv' }, [el('span', { text: 'ترنزیشن‌ها' }), el('b', { text: faNum(plan.meta.transitions) })]),

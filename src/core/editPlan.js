@@ -11,6 +11,7 @@ import { clamp } from './util.js';
 import { resolveCutSource, usageCounts, MIN_CUT } from './cut.js';
 import { applyOverlays } from './overlays.js';
 import { nearestBeat } from './beats.js';
+import { computeAutoLight } from './lighting.js';
 
 export function beatPeriodOf(plan) {
   return plan.music?.bpm ? 60 / plan.music.bpm : (plan.bpm ? 60 / plan.bpm : 0.6);
@@ -35,7 +36,9 @@ export function retime(plan, { rebuildText = true } = {}) {
     assetsUsed: new Set(plan.cuts.map((c) => c.assetId)).size,
   };
   if (plan.music) {
-    const maxStart = Math.max(0, (plan.music.duration || 0) - plan.duration - 0.05);
+    const isSeq = plan.settings?.cutMode === 'sequence';
+    const needWin = isSeq ? Math.min(plan.duration, plan.music.duration || 0) : plan.duration;
+    const maxStart = Math.max(0, (plan.music.duration || 0) - needWin - 0.05);
     plan.musicStart = clamp(plan.musicStart || 0, 0, maxStart);
     plan.music.startTime = plan.musicStart;
   }
@@ -82,9 +85,10 @@ export function refreshAllSources(plan) {
 export function moveCut(plan, index, delta) {
   const to = clamp(index + delta, 0, plan.cuts.length - 1);
   if (to === index) return plan;
-  // swap the *content* of the two slots so the music timing never shifts
   const a = plan.cuts[index], b = plan.cuts[to];
-  for (const key of ['asset', 'assetId', 'trimIn', 'trimOut', 'speed', 'planMute', 'motion', 'trimOverride', 'speedOverride']) {
+  const keys = ['asset', 'assetId', 'trimIn', 'trimOut', 'speed', 'planMute', 'motion', 'autoLight', 'trimOverride', 'speedOverride'];
+  if (plan.settings?.cutMode === 'sequence') keys.push('dur');
+  for (const key of keys) {
     const tmp = a[key];
     a[key] = b[key];
     b[key] = tmp;
@@ -192,8 +196,28 @@ export function replaceAsset(plan, index, asset) {
   cut.assetId = asset.id;
   cut.trimOverride = null;
   cut.speedOverride = null;
-  const counts = usageCounts(plan.cuts, index);
-  refreshCutSource(plan, cut, { reuse: counts.get(asset.id) || 0 });
+  cut.autoLight = computeAutoLight(asset.analysis);
+  if (plan.settings?.cutMode === 'sequence') {
+    if (asset.kind === 'video') {
+      const rawDur = Math.max(MIN_CUT, asset.duration || 0);
+      const srcIn = clamp(asset.trimIn || 0, 0, Math.max(0, rawDur - MIN_CUT));
+      const srcOut = Math.max(srcIn + MIN_CUT, asset.trimOut ?? rawDur);
+      cut.dur = +(srcOut - srcIn).toFixed(4);
+      cut.trimIn = +srcIn.toFixed(4);
+      cut.trimOut = +srcOut.toFixed(4);
+      cut.speed = 1;
+      cut.planMute = (plan.settings?.sourceGain ?? 0.35) <= 0.001;
+    } else {
+      cut.dur = clamp(plan.settings?.photoDuration || 3.2, 1.5, 10);
+      cut.trimIn = 0;
+      cut.trimOut = null;
+      cut.speed = 1;
+      cut.planMute = true;
+    }
+  } else {
+    const counts = usageCounts(plan.cuts, index);
+    refreshCutSource(plan, cut, { reuse: counts.get(asset.id) || 0 });
+  }
   plan.meta.assetsUsed = new Set(plan.cuts.map((c) => c.assetId)).size;
   return retime(plan);
 }
@@ -213,6 +237,9 @@ export function setCutBeats(plan, index, beats, { mode = 'absorb' } = {}) {
  */
 export function fitToMusic(plan) {
   if (!plan.music?.duration) return plan;
+  // In sequential no-cut mode, never chop or drop user clips: `musicLoop()` wraps
+  // the music bed across bar boundaries so long sequences never go silent.
+  if (plan.settings?.cutMode === 'sequence') return plan;
   const beat = beatPeriodOf(plan);
   const minDur = Math.max(MIN_CUT, beat * 0.5);
   const avail = Math.max(0.5, plan.music.duration - (plan.musicStart || 0) - 0.05);

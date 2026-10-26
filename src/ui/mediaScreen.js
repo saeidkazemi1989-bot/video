@@ -6,8 +6,9 @@ import { analyzeAll } from '../core/analyze.js';
 import { makeDemoMedia } from '../core/demo.js';
 import {
   go, btn, toast, startBusy, updateBusy, stopBusy, openSheet, closeSheet,
-  setBottomBar, confirmSheet, setRouter,
+  setBottomBar, confirmSheet, setRouter, seg,
 } from './shell.js';
+import { patchSettings } from '../project.js';
 import { briefCard } from './briefCard.js';
 
 const MOOD_FA = {
@@ -80,7 +81,12 @@ function addCard() {
   }, [
     el('div', { class: 'dropzone__icon', text: '🖼️' }),
     el('b', { text: state.assets.length ? 'افزودن عکس یا ویدیو' : 'گالری را باز کن و چند فایل انتخاب کن' }),
-    el('div', { class: 'muted mt-8', text: 'محدودیتی در تعداد نیست — ویدیوهای طولانی را خودم کوتاه می‌کنم' }),
+    el('div', {
+      class: 'muted mt-8',
+      text: state.settings.cutMode === 'sequence'
+        ? 'حالت پشت‌سرهم فعال است — ویدیوها بدون برش و به ترتیب خودت می‌آیند'
+        : 'محدودیتی در تعداد نیست — ویدیوهای طولانی را خودم کوتاه می‌کنم',
+    }),
   ]);
 
   return el('div', { class: 'card card--pad-lg stack' }, [
@@ -97,7 +103,8 @@ function addCard() {
 function gridCard() {
   const mediaGrid = el('div', { class: 'grid-media' });
   state.assets.forEach((asset, i) => mediaGrid.append(thumb(asset, i)));
-  return el('div', { class: 'card' }, [
+  const isSeq = state.settings.cutMode === 'sequence';
+  return el('div', { class: 'card stack' }, [
     el('div', { class: 'card__head' }, [
       el('h3', { text: `${faNum(state.assets.length)} فایل انتخاب‌شده` }),
       el('button', {
@@ -109,6 +116,23 @@ function gridCard() {
     mediaGrid,
     el('div', { class: 'row mt-8' }, [
       el('span', { class: 'muted', text: 'روی هر فایل بزنی، از ریلز حذف/اضافه می‌شود. دکمه ⋮ برای برش، ستاره و جابه‌جایی.' }),
+    ]),
+    el('div', { class: 'field mt-8' }, [
+      el('label', { text: 'نحوهٔ چیدمان و برش ویدیوها' }),
+      seg([
+        { id: 'beat', label: '✂️ برش ریتمیک' },
+        { id: 'sequence', label: '🎞️ پشت‌سرهم (بدون برش)' },
+      ], state.settings.cutMode || 'beat', (id) => {
+        patchSettings({ cutMode: id });
+        savePrefs();
+        renderMediaScreen(document.getElementById('screen'));
+      }),
+      el('div', {
+        class: 'muted',
+        text: isSeq
+          ? 'هر ویدیو کامل و بدون برش، دقیقاً به ترتیب بالا پخش می‌شود؛ فقط در رفتن به ویدیوی بعدی ترنزیشن می‌خورد و قاب و نور تنظیم می‌شود.'
+          : 'ویدیوها هماهنگ با ضرب آهنگ برش می‌خورند و چیده می‌شوند.',
+      }),
     ]),
   ]);
 }

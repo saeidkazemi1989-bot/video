@@ -80,16 +80,28 @@ jobs:
           ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Collect APK
+        id: reltarget
         run: |
           mkdir -p out
-          cp android/app/build/outputs/apk/debug/*.apk "out/reelforge-${GITHUB_SHA::7}-debug.apk"
+          PKG_VER="$(node -p "require('./package.json').version")"
+          cp android/app/build/outputs/apk/debug/*.apk "out/reelforge-v${PKG_VER}-${GITHUB_SHA::7}-debug.apk"
           ls -la out
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          elif ! git ls-remote --exit-code --tags origin "refs/tags/v${PKG_VER}" > /dev/null 2>&1; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=v${PKG_VER}" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "tag=v${PKG_VER}" >> "$GITHUB_OUTPUT"
+          fi
 
       # Keeps a plain, fetchable copy of the newest APK on the `apk-build` branch so the
       # file can be pulled over git/https without opening an authenticated release page.
-      # Runs on every version tag, or on demand via the "publish_apk_branch" input.
+      # Runs on every version tag, new package.json version, or via "publish_apk_branch".
       - name: Publish APK to the apk-build branch
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_apk_branch
+        if: steps.reltarget.outputs.publish == 'true' || inputs.publish_apk_branch
         run: |
           set -euo pipefail
           apk="$(ls out/*.apk | head -1)"
@@ -100,14 +112,14 @@ jobs:
           cp "$apk" reelforge-latest.apk
           {
             echo "ریل‌فورج — آخرین APK ساخته‌شده"
-            echo "ref:    ${GITHUB_REF_NAME}"
+            echo "ref:    ${{ steps.reltarget.outputs.tag }}"
             echo "commit: ${GITHUB_SHA}"
             echo "file:   reelforge-latest.apk"
             echo "size:   $(stat -c%s reelforge-latest.apk) bytes"
             echo "built:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > BUILD.txt
           git add -f reelforge-latest.apk BUILD.txt
-          git commit -q -m "build(apk): ${GITHUB_REF_NAME} ${GITHUB_SHA::7} [skip ci]"
+          git commit -q -m "build(apk): ${{ steps.reltarget.outputs.tag }} ${GITHUB_SHA::7} [skip ci]"
           git push -f origin apk-build
 
       - name: Diagnostics
@@ -148,14 +160,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Publish release (on tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish release
+        if: steps.reltarget.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.reltarget.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.reltarget.outputs.tag }}
           files: out/*.apk
           generate_release_notes: true
           body: |
-            ریل‌فورج — نسخهٔ اندروید (APK تستی).
+            ریل‌فورج ${{ steps.reltarget.outputs.tag }} — نسخهٔ اندروید (با امضای ثابت؛ بدون نیاز به حذف نسخهٔ قبلی روی ۱٫۳٫۷ به بالا نصب می‌شود).
 
-            نصب: فایل APK را روی گوشی باز کن و اجازهٔ «نصب از منابع ناشناس» را بده.
-            برای ساخت iOS به macOS + Xcode نیاز است (به README مراجعه کن).
+            تغییرات ۱٫۳٫۸:
+            • حالت «پشت‌سرهم (بدون برش)»: ویدیوها بدون تکه‌شدن و دقیقاً به ترتیب خودت پشت‌سرهم می‌آیند و فقط در رفتن به ویدیوی بعدی ترنزیشن نرم می‌خورد.
+            • تنظیم خودکار نور و روشنایی هر نما (Auto-Light) در کنار تنظیم قاب ۹:۱۶.
+            • رفع دو بار اعمال‌شدن رنگ در لحظهٔ ترنزیشن بین دو نما.

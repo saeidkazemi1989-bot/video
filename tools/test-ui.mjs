@@ -552,5 +552,30 @@ console.log('\n▸ device report sheet');
   closeSheet();
 }
 
+console.log('\n▸ sequential no-cut mode + auto-lighting in the UI');
+{
+  state.assets = [fakeAsset(0, 'video'), fakeAsset(1, 'video'), fakeAsset(2, 'video')];
+  state.settings.cutMode = 'beat';
+  renderStep(1);
+  ok(screen.textContent.includes('پشت‌سرهم (بدون برش)'), 'step 1 media card offers sequential no-cut mode');
+  const seqBtn1 = [...screen.querySelectorAll('.seg button')].find((b) => b.textContent.includes('پشت‌سرهم'));
+  ok(!!seqBtn1, 'sequential mode button exists on step 1');
+  seqBtn1.dispatchEvent(new window.Event('click'));
+  ok(state.settings.cutMode === 'sequence', 'clicking sequential button on step 1 switches cutMode to sequence');
+
+  renderStep(2);
+  ok(screen.textContent.includes('ترنزیشن در رفتن به ویدیوی بعدی'), 'step 2 shows transition picker when in sequence mode');
+  ok(screen.textContent.includes('تنظیم خودکار نور هر نما'), 'step 2 offers per-clip auto-lighting toggle');
+
+  const plan = ensurePlan({ force: true });
+  ok(plan.cuts.length === 3 && plan.meta.cutMode === 'sequence', 'ensurePlan builds 3 unchopped shots for 3 videos');
+  renderStep(5);
+  ok(screen.textContent.includes('پشت‌سرهم (بدون برش)') && screen.textContent.includes('تنظیم نور فعال'),
+    'step 5 preview summarises sequential mode and active auto-lighting');
+
+  // reset back to default for cleanliness
+  state.settings.cutMode = 'beat';
+}
+
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures}/${checks} UI checks passed`);
 process.exit(failures ? 1 : 0);

@@ -1,15 +1,16 @@
 {
   "name": "reelforge",
-  "version": "1.3.7",
+  "version": "1.3.8",
   "description": "ReelForge — از عکس و ویدیوهایت، خودکار یک ریل حرفه‌ای اینستاگرام بساز (اندروید + iOS)",
   "main": "index.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tools/test-core.mjs && node tools/test-features.mjs && node tools/test-ui.mjs && node tools/test-glsl.mjs",
+    "test": "node tools/test-core.mjs && node tools/test-features.mjs && node tools/test-ui.mjs && node tools/test-glsl.mjs && node tools/check-music-finite.mjs",
     "test:core": "node tools/test-core.mjs",
     "test:ui": "node tools/test-ui.mjs",
+    "test:music": "node tools/check-music-finite.mjs",
     "cap:sync": "npm run build && npx cap sync",
     "android": "npm run cap:sync && npx cap open android",
     "ios": "npm run cap:sync && npx cap open ios",
